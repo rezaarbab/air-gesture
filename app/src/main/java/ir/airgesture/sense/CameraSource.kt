@@ -72,6 +72,15 @@ class CameraSource(
     private var faceTotalNs = 0L
     private var handTotalNs = 0L
     private var blinkNameMisses = 0
+    private var faceDelegate = "?"
+    private var handDelegate = "?"
+    private var decodeFails = 0
+
+    private fun slot(o: Any?, needed: Boolean): String = when {
+        !needed -> "not used"
+        o != null -> "live"
+        else -> "EMPTY"
+    }
 
     var faceCount = 0; private set
     var handCount = 0; private set
@@ -135,6 +144,12 @@ class CameraSource(
 
         if (needFace && openFace(preferGpu) == null) return false
         if (needHand && openHand(preferGpu) == null) return false
+        // This line is what was missing: it names which model slots actually hold an object. A
+        // loaded-but-unassigned model looks exactly like a working one in every other log line.
+        Air.note(
+            "model: ready face=${slot(face, needFace)} hand=${slot(hand, needHand)} " +
+                "($faceDelegate/$handDelegate)",
+        )
 
         val t = HandlerThread("air-cam")
         thread = t
@@ -201,25 +216,24 @@ class CameraSource(
     /** GPU first, because it is usually twice as fast - and CPU on any ROM that refuses it. */
     private fun openFace(preferGpu: Boolean): FaceLandmarker? {
         val opts = faceOptions(preferGpu) ?: return null
-        return try {
-            FaceLandmarker.createFromOptions(ctx, opts).also {
-                Air.note("model: face on ${if (preferGpu) "GPU" else "CPU"}")
-            }
+        val m = try {
+            FaceLandmarker.createFromOptions(ctx, opts).also { faceDelegate = if (preferGpu) "GPU" else "CPU" }
         } catch (e: Exception) {
-            if (preferGpu) {
-                Air.note("model: GPU refused the face model (${e.javaClass.simpleName}), retrying on CPU")
-                val cpu = faceOptions(false) ?: return null
-                try {
-                    FaceLandmarker.createFromOptions(ctx, cpu)
-                } catch (e2: Exception) {
-                    Air.note("model: face CPU load failed too (${e2.javaClass.simpleName}: ${e2.message})")
-                    null
-                }
-            } else {
+            if (!preferGpu) {
                 Air.note("model: face load failed (${e.javaClass.simpleName}: ${e.message})")
-                null
+                return null
+            }
+            Air.note("model: GPU refused the face model (${e.javaClass.simpleName}), retrying on CPU")
+            val cpu = faceOptions(false) ?: return null
+            try {
+                FaceLandmarker.createFromOptions(ctx, cpu).also { faceDelegate = "CPU-fallback" }
+            } catch (e2: Exception) {
+                Air.note("model: face CPU load failed too (${e2.javaClass.simpleName}: ${e2.message})")
+                return null
             }
         }
+        face = m
+        return m
     }
 
     private fun faceOptions(gpu: Boolean): FaceLandmarker.FaceLandmarkerOptions? = try {
@@ -242,25 +256,24 @@ class CameraSource(
 
     private fun openHand(preferGpu: Boolean): HandLandmarker? {
         val opts = handOptions(preferGpu) ?: return null
-        return try {
-            HandLandmarker.createFromOptions(ctx, opts).also {
-                Air.note("model: hand on ${if (preferGpu) "GPU" else "CPU"}")
-            }
+        val m = try {
+            HandLandmarker.createFromOptions(ctx, opts).also { handDelegate = if (preferGpu) "GPU" else "CPU" }
         } catch (e: Exception) {
-            if (preferGpu) {
-                Air.note("model: GPU refused the hand model (${e.javaClass.simpleName}), retrying on CPU")
-                val cpu = handOptions(false) ?: return null
-                try {
-                    HandLandmarker.createFromOptions(ctx, cpu)
-                } catch (e2: Exception) {
-                    Air.note("model: hand CPU load failed too (${e2.javaClass.simpleName}: ${e2.message})")
-                    null
-                }
-            } else {
+            if (!preferGpu) {
                 Air.note("model: hand load failed (${e.javaClass.simpleName}: ${e.message})")
-                null
+                return null
+            }
+            Air.note("model: GPU refused the hand model (${e.javaClass.simpleName}), retrying on CPU")
+            val cpu = handOptions(false) ?: return null
+            try {
+                HandLandmarker.createFromOptions(ctx, cpu).also { handDelegate = "CPU-fallback" }
+            } catch (e2: Exception) {
+                Air.note("model: hand CPU load failed too (${e2.javaClass.simpleName}: ${e2.message})")
+                return null
             }
         }
+        hand = m
+        return m
     }
 
     private fun handOptions(gpu: Boolean): HandLandmarker.HandLandmarkerOptions? = try {
@@ -353,7 +366,10 @@ class CameraSource(
             if (jpeg) {
                 bmp = decodeJpeg(img)
                 if (bmp == null) {
-                    if (framesDelivered <= 3) Air.note("cam: JPEG frame did not decode")
+                    decodeFails += 1
+                    if (decodeFails == 1 || decodeFails % 60 == 0) {
+                        Air.note("cam: JPEG decode failed $decodeFails times (frame delivered, not decodable)")
+                    }
                 } else {
                     mp = BitmapImageBuilder(bmp).build()
                     if (wantFace) runFace(ts, mp)
@@ -401,11 +417,12 @@ class CameraSource(
      * reaching the model but nothing is recognized (orientation, light, or distance).
      */
     private fun reportProgress() {
+        val extra = if (decodeFails > 0) " (decode-fail=$decodeFails)" else ""
         if (wantFace && faceCount > 0 && faceCount % 20 == 0) {
-            Air.note("probe: face found in $faceSeen of $faceCount frames, ${ms(faceAvgMs)} ms each")
+            Air.note("probe: face found in $faceSeen of $faceCount frames, ${ms(faceAvgMs)} ms each$extra")
         }
         if (wantHand && handCount > 0 && handCount % 20 == 0) {
-            Air.note("probe: hand found in $handSeen of $handCount frames, ${ms(handAvgMs)} ms each")
+            Air.note("probe: hand found in $handSeen of $handCount frames, ${ms(handAvgMs)} ms each$extra")
         }
     }
 
