@@ -160,9 +160,9 @@ class CameraSource(
      */
     private fun pickSize(chars: CameraCharacteristics): Size {
         val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) as? StreamConfigurationMap
-        val all = map?.getOutputSizes(ImageFormat.YUV_420_888) ?: arrayOf()
+        val all: Array<Size> = map?.getOutputSizes(ImageFormat.YUV_420_888) ?: emptyArray()
         val usable = all.filter { it.width in 320..1280 && it.height in 240..960 }
-        val pool = if (usable.isEmpty()) all else usable
+        val pool: List<Size> = if (usable.isEmpty()) all.toList() else usable
         if (pool.size != all.size) {
             Air.note("cam: ${all.size} YUV sizes offered, ${pool.size} in the 320-1280 band")
         }

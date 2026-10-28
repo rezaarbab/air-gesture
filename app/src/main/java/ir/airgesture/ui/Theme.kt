@@ -5,7 +5,6 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
@@ -46,7 +45,7 @@ fun AirTheme(content: @Composable () -> Unit) {
     )
     val type = Typography().let { base ->
         base.copy(
-            headlineSmall = TextStyle(size = 26.sp, fontWeight = FontWeight.Bold, color = Ink),
+            headlineSmall = base.headlineSmall.copy(fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Ink),
             titleMedium = base.titleMedium.copy(fontWeight = FontWeight.SemiBold, color = Ink),
             bodyLarge = base.bodyLarge.copy(color = Ink),
             bodyMedium = base.bodyMedium.copy(color = Ink),

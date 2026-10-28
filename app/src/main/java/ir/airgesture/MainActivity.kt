@@ -62,7 +62,8 @@ private val TABS = listOf("خانه", "نگاشت", "تشخیص", "راهنما"
 fun Root() {
     var tab by remember { mutableStateOf(0) }
     val snap by Air.state.collectAsState()
-    val prefs = remember { Prefs(LocalContext.current) }
+    val ctx = LocalContext.current
+    val prefs = remember(ctx) { Prefs(ctx) }
     Column(Modifier.fillMaxSize()) {
         Header(snap, prefs.mode)
         Segmented(TABS, tab) { tab = it }

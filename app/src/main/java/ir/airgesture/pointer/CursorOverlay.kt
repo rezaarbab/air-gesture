@@ -104,7 +104,6 @@ class CursorOverlay private constructor(
             color = Color.parseColor("#1A2A33")
             textSize = 12f * d
             textAlign = Paint.Align.CENTER
-            if (android.os.Build.VERSION.SDK_INT >= 17) textDirection = Paint.TEXT_DIRECTION_RTL
         }
 
         private var x = 0f
