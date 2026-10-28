@@ -94,13 +94,14 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putBoolean(K_SKEL, v).apply()
 
     /**
-     * Which pixel format the camera is asked for. JPEG is the one that delivered frames on his
-     * phone from the first build; YUV is faster but this HAL may refuse to stream it, and that
-     * distinction is what the watchdog line in CameraSource is there to prove.
+     * Which pixel format the camera is asked for. JPEG is the path proven on the test phone. The
+     * no-copy path is RGBA_8888 - NOT YUV_420_888, which MediaPipe rejects every frame with
+     * "Android media image must use RGBA_8888 config"; any stored value that is not RGBA falls back
+     * to JPEG so an old preference cannot brick capture.
      */
     var frameFormat: String
-        get() = if (sp.getString(K_FMT, null) == FMT_YUV) FMT_YUV else FMT_JPEG
-        set(v) = sp.edit().putString(K_FMT, if (v == FMT_YUV) FMT_YUV else FMT_JPEG).apply()
+        get() = if (sp.getString(K_FMT, null) == FMT_RGBA) FMT_RGBA else FMT_JPEG
+        set(v) = sp.edit().putString(K_FMT, if (v == FMT_RGBA) FMT_RGBA else FMT_JPEG).apply()
 
     fun actionFor(g: AirGesture, m: SenseMode): AirAction {
         val key = K_MAP + m.name + "." + g.name
@@ -158,6 +159,6 @@ class Prefs(ctx: Context) {
         private const val K_FMT = "frame_format"
         private const val K_MAP = "map."
         const val FMT_JPEG = "jpeg"
-        const val FMT_YUV = "yuv"
+        const val FMT_RGBA = "rgba"
     }
 }

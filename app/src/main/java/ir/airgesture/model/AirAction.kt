@@ -28,7 +28,7 @@ enum class AirAction(val title: String) {
 
         /** The shipped mapping: hand up pages the feed, a pinch clicks under the cursor. */
         fun defaultFor(g: AirGesture, m: SenseMode): AirAction {
-            if (m == SenseMode.POINTER) {
+            if (m.isPointer) {
                 return when (g) {
                     AirGesture.PINCH -> TAP_POINTER
                     AirGesture.DOUBLE_PINCH -> RECENTER

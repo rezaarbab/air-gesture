@@ -1,11 +1,12 @@
 # اشاره — Air Gestures
 
-کنترل گوشی با حرکت سر و دست در هوا، بدون لمس صفحه. یک APK، سه حالت، یک راه اجرا.
+کنترل گوشی با حرکت سر و دست در هوا، بدون لمس صفحه. یک APK، چهار حالت، یک راه اجرا.
 
 | حالت | منبع | چه می‌دهد |
 |---|---|---|
-| **نشانگر** | دوربین جلو + `FaceLandmarker` (۴۶۸ لندمارک) + `HandLandmarker` | سر = مکان‌نمای ماوس، پینچ = کلیک، پینچ نگه‌داشته + حرکت = کشیدن، دو پینچ = تنظیم نقطهٔ مرجع، پلک = کلیک اختیاری، توقف روی چیزها = «حلقهٔ آب» و کلیک |
-| **دست** | دوربین جلو + `HandLandmarker` | دست بالا/پایین، پینچ، دو پینچ، کف باز ثابت |
+| **نشانگر با سر** | `FaceLandmarker` (۴۶۸) + `HandLandmarker` | نوک بینی = سرعت مکان‌نما، پینچ = کلیک، پینچ نگه‌داشته + حرکت = کشیدن، دو پینچ = نقطهٔ مرجع، پلک = کلیک اختیاری، توقف = «حلقهٔ آب» و کلیک |
+| **نشانگر با انگشت** | `HandLandmarker` (تا ۲ دست هم‌زمان) | نوک انگشت اشاره مکان‌نما را می‌برد مثل ماوس؛ پینچ کلیک، نگه‌داشتن + حرکت = درگ؛ چهره هر ۳ فریم برای پلک |
+| **دست** | `HandLandmarker` | دست بالا/پایین، پینچ، دو پینچ، کف باز ثابت |
 | **سنسور** | `TYPE_PROXIMITY` | یک موج، دو موج، پوشاندن طولانی |
 
 تشخیص همه‌جا روی دستگاه است (TFLite، آفلاین). لمس از
@@ -35,7 +36,7 @@
 
 - **JPEG (پیش‌فرض):** `ImageReader(JPEG)` → `BitmapFactory` → چرخش فیزیکی بیتمپ → `BitmapImageBuilder`.
   همین مسیر روی گوشی تست‌شده فریم داد: `first frame after 515ms`، `78 frames in the first 3000ms`.
-- **YUV:** `ImageReader(YUV_420_888)` مستقیم به `MediaImageBuilder` و چرخش اعلامی در
+- **RGBA:** `ImageReader(RGBA_8888)` مستقیم به `MediaImageBuilder` و چرخش اعلامی در
   `ImageProcessingOptions` — در تئوری سریع‌تر (بدون decode و بدون کپی بیتمپ)، ولی روی این HAL هنوز
   اندازه‌گیری نشده؛ وقتی مدل واقعاً صدا زده شود، تفاضلش در `probe: … ms each` دیده می‌شود.
 
@@ -87,7 +88,7 @@ decode/BlinkDecoder.kt      blendshape پلک → کلیک اختیاری
 pointer/PointerFilter.kt    فاصلهٔ سر از نقطهٔ مرجع → سرعت مکان‌نما (ای‌ام‌ای + ددزون + سقف)
 pointer/DwellTracker.kt     توقف → پیشرفت حلقه → یک کلیک
 pointer/CursorOverlay.kt    نقطه، حلقه، و پرشدنِ آبِ خودِ کنترل
-sense/CameraSource.kt       Camera2 YUV → MediaPipe (چهره و دست، delegate با fallback)
+sense/CameraSource.kt       Camera2 (JPEG یا RGBA) → MediaPipe (چهره و تا دو دست، delegate با fallback)
 inject/Synth.kt             ژست → Path/StrokeDescription (duration = سرعت = fling)
 inject/AirInputService.kt   صف تزریق + hit-test درخت accessibility
 svc/AirService.kt           Foreground: دو ساعت، دوربین/سنسور، تبدیل ژست به کار

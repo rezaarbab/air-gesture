@@ -91,23 +91,24 @@ fun Home() {
 
         SectionCard("حالت کار") {
             Segmented(
-                listOf(SenseMode.POINTER.title, SenseMode.GESTURE.title, SenseMode.PROX.title),
-                listOf(SenseMode.POINTER, SenseMode.GESTURE, SenseMode.PROX).indexOf(mode),
+                listOf(SenseMode.POINTER.title, SenseMode.HAND_POINTER.title, SenseMode.GESTURE.title, SenseMode.PROX.title),
+                MODES.indexOf(mode),
             ) { i ->
-                mode = listOf(SenseMode.POINTER, SenseMode.GESTURE, SenseMode.PROX)[i]
+                mode = MODES[i]
                 prefs.mode = mode
                 apply(prefs, snap.running, ctx)
             }
             Hint(
                 when (mode) {
                     SenseMode.POINTER -> "سر نشانگر را می‌برد؛ پینچ کلیک، پینچ نگه‌داشته + حرکت = کشیدن، دو پینچ = تنظیم نقطهٔ مرجع."
+                    SenseMode.HAND_POINTER -> "نوک انگشت اشاره نشانگر را می‌برد (مثل ماوس)، پینچ کلیک و نگه‌داشتنِ پینچ + حرکت = کشیدن. هر دو دست رد می‌شوند."
                     SenseMode.GESTURE -> "فقط دست: بالا/پایین، پینچ، دو پینچ، کف باز ثابت."
                     SenseMode.PROX -> "بدون دوربین: یک موج، دو موج، پوشاندن طولانی."
                 },
             )
         }
 
-        if (mode == SenseMode.POINTER) {
+        if (mode.isPointer) {
             SectionCard("نشانگر", "سر تو سرعت است، نه موقعیت") {
                 Text("سرعت", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 6.dp))
                 Segmented(listOf("آرام", "متوسط", "تند", "خیلی تند"), GainSpeeds.indexOf(gain)) { i ->
@@ -153,12 +154,14 @@ fun Home() {
                     apply(prefs, snap.running, ctx)
                 }
                 Text("دقت مدل دست", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+                if (mode == SenseMode.POINTER) {
                 Segmented(listOf("هر فریم", "یکی در میون", "یکی در سه"), Strides.indexOf(stride)) { i ->
                     stride = Strides[i]
                     prefs.handStride = stride
                     apply(prefs, snap.running, ctx)
                 }
-                Hint("هر فریم کلیک سریع‌تر، ولی فریم‌рейت پایین‌تر.")
+                Hint("هر فریم کلیک سریع‌تر، ولی نرخ فریم پایین‌تر.")
+                }
             }
         }
 
@@ -198,15 +201,16 @@ fun Home() {
                 }
                 Hint("خودکار = (۳۶۰ منهای زاویهٔ سنسور). اگر دست یا چهره هیچ‌وقت پیدا نشد، یکی از ۹۰/۲۷۰ را امتحان کن: مدل کف دست به جهت‌گیری حساس است.")
                 Text("فرمت فریم", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
-                Segmented(listOf("JPEG (اثبات‌شده)", "YUV (سریع‌تر)"), if (fmt == Prefs.FMT_YUV) 1 else 0) { i ->
-                    fmt = if (i == 1) Prefs.FMT_YUV else Prefs.FMT_JPEG
+                Segmented(listOf("JPEG (اثبات‌شده)", "RGBA (بدون دیکد)"), if (fmt == Prefs.FMT_RGBA) 1 else 0) { i ->
+                    fmt = if (i == 1) Prefs.FMT_RGBA else Prefs.FMT_JPEG
                     prefs.frameFormat = fmt
                     apply(prefs, snap.running, ctx)
                 }
                 Hint(
-                    "JPEG همان مسیری است که در گوشی تو فریم می‌داد. اگر با YUV در تب تشخیص خط «NO FRAME DELIVERED» " +
-                        "دیدی، یعنی HAL این گوشی YUV را روی این سطح استریم نمی‌کند؛ برگردان روی JPEG. " +
-                        "اگر «found in 0 of 20» دیدی، فریم می‌آید و مشکل جهت/نور است، نه دوربین.",
+                    "JPEG مطمئن است ولی هر فریم را دیکد و یک بیتمپ تازه می‌سازد. RGBA همان Image را " +
+                        "بدون دیکد به مدل می‌دهد؛ اگر «framerate» با JPEG کم است این را روشن کن و عدد را " +
+                        "مقایسه کن. YUV_420_888 کار نمی‌کند: MediaPipe هر فریم را با " +
+                        "«must use RGBA_8888 config» رد می‌کند.",
                 )
                 ToggleLine("delegate روی GPU", "سریع‌تر؛ اگر رام رد کند خودش به CPU برمی‌گردد", gpu) {
                     gpu = it
@@ -222,11 +226,13 @@ fun Home() {
 
             SectionCard("همین حالا") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    DwellRing(if (mode == SenseMode.POINTER) snap.dwell else 0f)
+                    DwellRing(if (mode.isPointer) snap.dwell else 0f)
                     Spacer(Modifier.size(16.dp))
                     Column(Modifier.weight(1f)) {
                         KeyLine("framerate", "${snap.fps}", snap.fps > 12)
                         KeyLine("چهره/دست", snap.probe)
+                        KeyLine("دست‌های ردشده", "${snap.hands}", snap.hands > 1)
+                        KeyLine("اوج پلک", "${snap.blinkPeak}", snap.blinkPeak > 0.55f)
                         KeyLine("نشانگر", "${num(snap.cursorX)} , ${num(snap.cursorY)}")
                         KeyLine("قاب", snap.frameInfo)
                     }
@@ -267,6 +273,7 @@ fun Home() {
     }
 }
 
+private val MODES = listOf(SenseMode.POINTER, SenseMode.HAND_POINTER, SenseMode.GESTURE, SenseMode.PROX)
 private val GainSpeeds = listOf(1.6f, 2.4f, 3.4f, 4.6f)
 private val Smoothing = listOf(0.18f to "زیاد", 0.35f to "متوسط", 0.7f to "کم")
 private val DwellTimes = listOf(500L, 900L, 1400L, 2000L)

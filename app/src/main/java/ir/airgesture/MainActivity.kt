@@ -87,7 +87,7 @@ private fun Header(snap: Air.Snap, mode: SenseMode) {
                 !snap.running -> "خاموش" to coralError
                 !snap.accReady -> "مجوز دسترسی لازم است" to amberWarn
                 !snap.sourceUp -> "حسگر بالا نیامده" to amberWarn
-                !snap.tracking && mode == SenseMode.POINTER -> "چهره پیدا نیست" to amberWarn
+                !snap.tracking && !snap.handVisible && mode.isPointer -> "چهره یا دست پیدا نیست" to amberWarn
                 else -> "آماده — ${mode.title}" to deepGreen
             }
             Box(

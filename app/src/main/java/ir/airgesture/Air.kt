@@ -35,6 +35,8 @@ object Air {
         val moved: Boolean = false,
         val probe: String = "",
         val frameInfo: String = "",
+        val blinkPeak: Float = 0f,
+        val hands: Int = 0,
     )
 
     val state = MutableStateFlow(Snap())

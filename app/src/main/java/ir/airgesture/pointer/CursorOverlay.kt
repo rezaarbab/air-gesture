@@ -13,16 +13,17 @@ import android.view.View
 import android.view.WindowManager
 import ir.airgesture.Air
 import ir.airgesture.inject.AirInputService
+import kotlin.math.max
 import kotlin.math.min
 
 /**
  * Everything drawn over the other app: the cursor, the dwell "water", and the live skeleton of
- * whatever the model just recognized. It is one full-screen NOT_TOUCHABLE overlay so it can cover
- * a button without ever eating the touch that button needs.
+ * whatever the model just recognized. One full-screen NOT_TOUCHABLE overlay, so it can sit on top
+ * of a button without ever eating the touch that button needs.
  *
- * The skeleton is the answer to "the app says nothing": seeing your hand drawn means detection is
- * alive and only the threshold is wrong, seeing the dashed placeholder means the model never found
- * a hand at all. Those two need different fixes and the screen now says which one it is.
+ * The skeleton panel is sized to what it contains (up to two hands plus at most two wrapped lines
+ * of status), because a fixed box with a long Persian sentence drawn under it read as a banner
+ * across the whole top of the screen.
  */
 class CursorOverlay private constructor(
     private val wm: WindowManager,
@@ -35,8 +36,8 @@ class CursorOverlay private constructor(
         main.post { view.setPointer(x, y, progress, target, on) }
     }
 
-    fun setHand(pts: FloatArray?, pinchRatio: Float, closeAt: Float) {
-        main.post { view.setHand(pts, pinchRatio, closeAt) }
+    fun setHands(skeletons: List<FloatArray>, pinchRatio: Float, closeAt: Float) {
+        main.post { view.setHands(skeletons, pinchRatio, closeAt) }
     }
 
     fun setStatus(text: String) {
@@ -77,8 +78,13 @@ class CursorOverlay private constructor(
             strokeWidth = 3f * d
         }
         private val card = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(150, 255, 255, 255)
+            color = Color.argb(155, 255, 255, 255)
             style = Paint.Style.FILL
+        }
+        private val cardEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(60, 18, 33, 42)
+            style = Paint.Style.STROKE
+            strokeWidth = 1.5f * d
         }
         private val bone = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.parseColor("#0F7A52")
@@ -111,7 +117,7 @@ class CursorOverlay private constructor(
         private var progress = 0f
         private var target: AirInputService.Target? = null
         private var pointerOn = false
-        private var hand: FloatArray? = null
+        private var hands: List<FloatArray> = emptyList()
         private var pinch = 1f
         private var closeAt = 0.38f
         private var status = ""
@@ -121,8 +127,8 @@ class CursorOverlay private constructor(
             invalidate()
         }
 
-        fun setHand(pts: FloatArray?, ratio: Float, close: Float) {
-            hand = pts; pinch = ratio; closeAt = close
+        fun setHands(skeletons: List<FloatArray>, ratio: Float, close: Float) {
+            hands = skeletons; pinch = ratio; closeAt = close
             invalidate()
         }
 
@@ -134,7 +140,7 @@ class CursorOverlay private constructor(
         }
 
         override fun onDraw(c: Canvas) {
-            drawSkeleton(c)
+            drawPanel(c)
             if (!pointerOn) return
             val t = target
             if (t != null && progress > 0f) {
@@ -155,55 +161,99 @@ class CursorOverlay private constructor(
             }
         }
 
-        /** A framed box in the top corner with the 21 points mapped into it, mirrored like a selfie. */
-        private fun drawSkeleton(c: Canvas) {
-            val boxW = 108f * d
-            val boxH = 132f * d
-            val left = width - boxW - 10f * d
-            val top = 12f * d
-            val box = RectF(left, top, left + boxW, top + boxH)
-            c.drawRoundRect(box, 18f * d, 18f * d, card)
-            val pts = hand
-            if (pts == null || pts.size < 24) {
-                c.drawRoundRect(
-                    RectF(box.left + 14f * d, box.top + 20f * d, box.right - 14f * d, box.bottom - 26f * d),
-                    14f * d, 14f * d, ghost,
-                )
-                c.drawText("دست پیدا نیست", box.centerX(), box.centerY(), label)
+        /** Panel width follows the hands inside it and the longest wrapped status line - nothing else. */
+        private fun drawPanel(c: Canvas) {
+            val handCount = max(1, hands.size)
+            val cellW = 96f * d
+            val cellH = 118f * d
+            val pad = 10f * d
+            val lines = statusLines()
+            val textBlock = if (lines.isEmpty()) 0f else (lines.size * (label.textSize + 3f * d))
+            val widest = lines.maxOfOrNull { label.measureText(it) } ?: 0f
+            val bodyW = cellW * handCount + pad * (handCount - 1)
+            val panelW = max(bodyW, widest) + pad * 2f
+            val panelH = cellH + (if (lines.isEmpty()) 0f else pad + textBlock) + pad * 2f
+            val left = width - panelW - 10f * d
+            val panel = RectF(left, 10f * d, left + panelW, 10f * d + panelH)
+            c.drawRoundRect(panel, 18f * d, 18f * d, card)
+            c.drawRoundRect(panel, 18f * d, 18f * d, cardEdge)
+
+            if (hands.isEmpty()) {
+                val ghostBox = RectF(panel.left + pad, panel.top + pad, panel.right - pad, panel.top + pad + cellH)
+                c.drawRoundRect(ghostBox, 14f * d, 14f * d, ghost)
+                c.drawText("دست پیدا نیست", ghostBox.centerX(), ghostBox.centerY(), label)
             } else {
-                val pad = 12f * d
-                val inner = RectF(box.left + pad, box.top + pad, box.right - pad, box.bottom - 24f * d)
-                val sx = inner.width()
-                val sy = inner.height()
-                var bi = 0
-                while (bi + 1 < HAND_BONES.size) {
-                    val a = HAND_BONES[bi] * 2
-                    val b = HAND_BONES[bi + 1] * 2
-                    if (a + 1 < pts.size && b + 1 < pts.size) {
-                        c.drawLine(
-                            inner.left + (1f - pts[a]) * sx, inner.top + pts[a + 1] * sy,
-                            inner.left + (1f - pts[b]) * sx, inner.top + pts[b + 1] * sy, bone,
-                        )
-                    }
-                    bi += 2
-                }
-                val pinching = pinch < closeAt
-                var i = 0
-                while (i + 1 < pts.size) {
-                    val p = i / 2
-                    val paint = when {
-                        p in TIPS && pinching && p in PINCH_TIPS -> tip
-                        p in TIPS -> tip
-                        else -> joint
-                    }
-                    val radius = if (p in TIPS) 5.2f * d else 3.4f * d
-                    c.drawCircle(inner.left + (1f - pts[i]) * sx, inner.top + pts[i + 1] * sy, radius, paint)
-                    i += 2
+                hands.take(2).forEachIndexed { i, pts ->
+                    val cell = RectF(
+                        panel.left + pad + i * (cellW + pad),
+                        panel.top + pad,
+                        panel.left + pad + i * (cellW + pad) + cellW,
+                        panel.top + pad + cellH,
+                    )
+                    drawHand(c, pts, cell)
                 }
             }
-            if (status.isNotEmpty()) {
-                c.drawText(status, box.centerX(), box.bottom + 16f * d, label)
+            if (lines.isNotEmpty()) {
+                val textTop = panel.top + pad + cellH + pad + label.textSize
+                lines.forEachIndexed { i, line ->
+                    c.drawText(line, panel.centerX(), textTop + i * (label.textSize + 3f * d), label)
+                }
             }
+        }
+
+        private fun drawHand(c: Canvas, pts: FloatArray, cell: RectF) {
+            if (pts.size < 24) return
+            val inner = RectF(cell.left + 6f * d, cell.top + 6f * d, cell.right - 6f * d, cell.bottom - 6f * d)
+            val sx = inner.width()
+            val sy = inner.height()
+            var bi = 0
+            while (bi + 1 < HAND_BONES.size) {
+                val a = HAND_BONES[bi] * 2
+                val b = HAND_BONES[bi + 1] * 2
+                if (a + 1 < pts.size && b + 1 < pts.size) {
+                    c.drawLine(
+                        inner.left + (1f - pts[a]) * sx, inner.top + pts[a + 1] * sy,
+                        inner.left + (1f - pts[b]) * sx, inner.top + pts[b + 1] * sy, bone,
+                    )
+                }
+                bi += 2
+            }
+            var i = 0
+            while (i + 1 < pts.size) {
+                val p = i / 2
+                val radius = if (p in TIPS) 5.2f * d else 3.4f * d
+                c.drawCircle(inner.left + (1f - pts[i]) * sx, inner.top + pts[i + 1] * sy, radius, if (p in TIPS) tip else joint)
+                i += 2
+            }
+            // The pinching fingers light up, so a click is visible as it happens.
+            if (pinch < closeAt && pts.size > 17) {
+                c.drawCircle(inner.left + (1f - pts[8]) * sx, inner.top + pts[9] * sy, 9f * d, halo)
+            }
+        }
+
+        /** At most two lines, split on spaces, so a long sentence never becomes a banner. */
+        private fun statusLines(): List<String> {
+            val text = status.trim()
+            if (text.isEmpty()) return emptyList()
+            val limit = (width * 0.55f)
+            if (label.measureText(text) <= limit) return listOf(text)
+            val words = text.split(" ")
+            val lines = ArrayList<String>(2)
+            val current = StringBuilder()
+            for (w in words) {
+                val trial = if (current.isEmpty()) w else "$current $w"
+                if (label.measureText(trial) > limit && current.isNotEmpty()) {
+                    lines.add(current.toString())
+                    current.setLength(0)
+                    current.append(w)
+                    if (lines.size == 2) break
+                } else {
+                    current.setLength(0)
+                    current.append(trial)
+                }
+            }
+            if (lines.size < 2 && current.isNotEmpty()) lines.add(current.toString())
+            return lines
         }
     }
 
@@ -218,7 +268,6 @@ class CursorOverlay private constructor(
         )
 
         private val TIPS = setOf(4, 8, 12, 16, 20)
-        private val PINCH_TIPS = setOf(4, 8)
 
         fun attach(ctx: Context): CursorOverlay? {
             if (!Settings.canDrawOverlays(ctx)) {

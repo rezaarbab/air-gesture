@@ -59,6 +59,8 @@ fun Diag() {
             KeyLine("دست", if (snap.handVisible) "دیده می‌شود" else "نیست", snap.handVisible)
             KeyLine("framerate", "${snap.fps}", snap.fps > 12)
             KeyLine("مدل‌ها", "face ${ms(snap.faceMs)} · hand ${ms(snap.handMs)} ms")
+            KeyLine("دست‌های ردشده", "${snap.hands}")
+            KeyLine("اوج پلک", "${snap.blinkPeak}")
             KeyLine("دیدن/فریم", if (snap.probe.isEmpty()) "—" else snap.probe, snap.probe.contains("/"))
             KeyLine("نشانگر", "${num(snap.cursorX)} , ${num(snap.cursorY)}  (حرکت کرد: ${if (snap.moved) "بله" else "نه"})")
             KeyLine("حلقه", "${(snap.dwell * 100).toInt()}%  «${snap.target}»")

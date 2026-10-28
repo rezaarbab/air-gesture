@@ -36,22 +36,24 @@ import ir.airgesture.pointer.Move
 import ir.airgesture.pointer.PointerFilter
 import ir.airgesture.sense.CameraSource
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
  * Reads the camera or the sensor, decides what the movement meant, and hands it to the
  * accessibility service.
  *
- * Pointer mode runs two clocks: the camera thread produces samples as fast as the sensor allows,
- * and a 30 Hz loop on the main thread integrates head velocity into a cursor. That split is what
- * makes the cursor glide at 30 fps even when the model only manages 18.
+ * Pointer modes run two clocks: the camera thread produces samples as fast as the sensor allows,
+ * and a 30 Hz loop on the main thread integrates velocity into a cursor. That split is what makes
+ * the cursor glide at 30 fps even when the models manage 18 - and it is the same reason a
+ * fingertip can drive the cursor as well as a head can: only the source of the offset changes.
  */
 class AirService : Service(), SensorEventListener {
 
     private lateinit var prefs: Prefs
     private var mode = SenseMode.POINTER
 
-    private var handDecoder: HandDecoder? = null
+    private val handDecoders = HashMap<Int, HandDecoder>()
     private var proxDecoder: ProxDecoder? = null
     private var blinkDecoder: BlinkDecoder? = null
     private var filter: PointerFilter? = null
@@ -73,11 +75,15 @@ class AirService : Service(), SensorEventListener {
     @Volatile
     private var lastMove = Move(0f, 0f, 0f, false)
     private var lastIntegrateT = 0L
-    private var lastNoseX = -1f
-    private var lastNoseY = -1f
+    private var lastPointerX = -1f
+    private var lastPointerY = -1f
     private var cachedTarget: AirInputService.Target? = null
     private var lastTreeAsk = 0L
     private var movedOnce = false
+
+    private val skel0 = arrayOfNulls<FloatArray>(1)
+    private val skel1 = arrayOfNulls<FloatArray>(1)
+    private var lastPinch = 1f
 
     private var pinchHeld = false
     private var pinchSince = -1L
@@ -85,10 +91,12 @@ class AirService : Service(), SensorEventListener {
     private val dragPath = ArrayList<FloatArray>(80)
     private var suppressPinchBefore = 0L
 
+    private var blinkPeak = 0f
+    private var blinkSamples = 0
+
     private var lastNear = false
     private var statsStartT = 0L
     private var statsFrames = 0
-    private var lastNearT = 0L
 
     override fun onBind(i: Intent?): IBinder? = null
 
@@ -124,9 +132,6 @@ class AirService : Service(), SensorEventListener {
         false
     }
 
-    /** JPEG is the path proven to deliver frames on the test phone; YUV is selectable to A/B it. */
-    private fun jpeg(): Boolean = prefs.frameFormat != Prefs.FMT_YUV
-
     private fun begin() {
         // A reload lands on a live service: without tearing the old source down the cursor and
         // the proximity listener would be registered twice.
@@ -135,8 +140,9 @@ class AirService : Service(), SensorEventListener {
         mode = prefs.mode
         pinchClose = prefs.handCfg().pinchClose
         when (mode) {
-            SenseMode.POINTER -> startPointer()
-            SenseMode.GESTURE -> startGesture()
+            SenseMode.POINTER -> startCamera(true, 1, prefs.handStride)
+            SenseMode.HAND_POINTER -> startCamera(true, 3, 1)
+            SenseMode.GESTURE -> startCamera(false, 1, 1)
             SenseMode.PROX -> startProx()
         }
         Air.note("svc: running, mode=${mode.name}")
@@ -145,11 +151,10 @@ class AirService : Service(), SensorEventListener {
     private fun end() {
         tick.removeCallbacks(runnable)
         main.removeCallbacks(loop)
+        handDecoders.clear()
         proxDecoder?.reset()
-        handDecoder?.reset()
         blinkDecoder?.reset()
         proxDecoder = null
-        handDecoder = null
         blinkDecoder = null
         filter = null
         dwell = null
@@ -170,6 +175,10 @@ class AirService : Service(), SensorEventListener {
         statsStartT = 0L
         statsFrames = 0
         movedOnce = false
+        blinkPeak = 0f
+        blinkSamples = 0
+        skel0[0] = null
+        skel1[0] = null
         dragPath.clear()
         pinchHeld = false
         suppressPinchBefore = 0L
@@ -183,30 +192,30 @@ class AirService : Service(), SensorEventListener {
                 tracking = false,
                 moved = false,
                 probe = "",
+                hands = 0,
             )
         }
     }
 
-    // ---- pointer mode ----
-
-    private fun startPointer() {
-        filter = PointerFilter(prefs.pointerCfg())
-        dwell = DwellTracker(prefs.dwellCfg())
-        blinkDecoder = BlinkDecoder(prefs.blinkCfg())
-        handDecoder = HandDecoder(prefs.handCfg())
-        attachDrawers()
-        startTreeThread()
+    private fun startCamera(needFace: Boolean, faceStride: Int, handStride: Int) {
+        if (mode.isPointer) {
+            filter = PointerFilter(prefs.pointerCfg())
+            dwell = DwellTracker(prefs.dwellCfg())
+            blinkDecoder = BlinkDecoder(prefs.blinkCfg())
+            startTreeThread()
+        }
+        overlay = CursorOverlay.attach(this)
+        if (overlay == null) hud = Hud.attach(this)
         val src = CameraSource(applicationContext, ::onFace, ::onHand)
         camSource = src
-        if (!src.start(true, true, prefs.handStride, prefs.gpuDelegate, prefs.rotation, jpeg())) {
-            Air.note("pointer: camera unavailable, falling back to proximity")
-            // The cursor must not stay armed on a frozen position and click by itself.
+        if (!src.start(needFace, true, handStride, faceStride, prefs.gpuDelegate, prefs.rotation, rgba())) {
+            Air.note("${mode.name.lowercase()}: camera unavailable, falling back to proximity")
             main.removeCallbacks(loop)
             detachDrawers()
-            dwell = null
             filter = null
+            dwell = null
             blinkDecoder = null
-            handDecoder = null
+            handDecoders.clear()
             treeThread?.quitSafely()
             treeThread = null
             treeHandler = null
@@ -214,30 +223,8 @@ class AirService : Service(), SensorEventListener {
             startProx()
             return
         }
-        main.post(loop)
+        if (mode.isPointer) main.post(loop)
         Air.update { it.copy(sourceUp = true, frameInfo = src.lastProbe) }
-    }
-
-    private fun startGesture() {
-        handDecoder = HandDecoder(prefs.handCfg())
-        attachDrawers()
-        val src = CameraSource(applicationContext, ::onFace, ::onHand)
-        camSource = src
-        if (!src.start(false, true, 1, prefs.gpuDelegate, prefs.rotation, jpeg())) {
-            Air.note("gesture: camera unavailable, falling back to proximity")
-            detachDrawers()
-            handDecoder = null
-            camSource = null
-            startProx()
-            return
-        }
-        Air.update { it.copy(sourceUp = true, frameInfo = src.lastProbe) }
-    }
-
-    /** The overlay draws the skeleton and the cursor; the pill is only the fallback when it cannot. */
-    private fun attachDrawers() {
-        overlay = CursorOverlay.attach(this)
-        if (overlay == null) hud = Hud.attach(this)
     }
 
     private fun detachDrawers() {
@@ -277,25 +264,25 @@ class AirService : Service(), SensorEventListener {
             curY = ny
         }
         val d = dwell ?: return
-        // The cursor always follows the head; only the dwell waits for a first real movement,
+        // The cursor always follows the source; only the dwell waits for a real first movement,
         // otherwise the app would click the screen center one second after start with no input.
         if (!movedOnce) {
             overlay?.setPointer(curX * screenW(), curY * screenH(), 0f, cachedTarget, true)
             Air.update { it.copy(cursorX = curX, cursorY = curY, dwell = 0f) }
             return
         }
-        // The tree is only worth reading once a fill is visibly under way (or when the user
-        // insists the pointer must sit on a real control).
         val previous = Air.state.value.dwell
         if ((previous > 0.02f || prefs.dwellNeedsTarget) && now - lastTreeAsk > TREE_MS) {
             lastTreeAsk = now
             askTree()
         }
-        val tick = d.tick(now, curX, curY, cachedTarget?.key)
-        val t = cachedTarget
-        overlay?.setPointer(curX * screenW(), curY * screenH(), tick.progress, t, true)
-        Air.update { it.copy(cursorX = curX, cursorY = curY, dwell = tick.progress, moved = true, target = t?.label.orEmpty()) }
-        if (tick.fired) dwellClick(t)
+        val t = d.tick(now, curX, curY, cachedTarget?.key)
+        val target = cachedTarget
+        overlay?.setPointer(curX * screenW(), curY * screenH(), t.progress, target, true)
+        Air.update {
+            it.copy(cursorX = curX, cursorY = curY, dwell = t.progress, moved = true, target = target?.label.orEmpty())
+        }
+        if (t.fired) dwellClick(target)
     }
 
     private fun askTree() {
@@ -309,9 +296,8 @@ class AirService : Service(), SensorEventListener {
     }
 
     /**
-     * Snap to the control's own center only when that node is actually actionable. A plain
-     * container can be the whole screen, and clicking its middle is the "it clicked something I
-     * never aimed at" bug.
+     * Snap to the control's own center only when that node is actionable. A plain container can be
+     * the whole screen, and clicking its middle is the "it clicked something I never aimed at" bug.
      */
     private fun dwellClick(t: AirInputService.Target?) {
         val w = screenW()
@@ -330,9 +316,8 @@ class AirService : Service(), SensorEventListener {
 
     private fun onFace(s: FaceSample) {
         countFrame(s.tMs)
-        val tracking = s.present
-        Air.update { it.copy(faceVisible = tracking, tracking = tracking) }
-        if (!tracking) {
+        Air.update { it.copy(faceVisible = s.present, tracking = s.present) }
+        if (!s.present) {
             // Losing the face freezes the cursor and cancels any fill in progress: a stale
             // position must not turn into a click.
             lastMove = Move(0f, 0f, 0f, false)
@@ -340,25 +325,65 @@ class AirService : Service(), SensorEventListener {
             overlay?.setStatus("چهره پیدا نیست")
             return
         }
-        lastNoseX = s.noseX
-        lastNoseY = s.noseY
-        lastMove = filter?.feed(s.tMs, s.noseX, s.noseY, true) ?: lastMove
-        overlay?.setStatus(if (movedOnce) "نشانگر آماده" else "سر را تکان بده تا نشانگر راه بیفتد")
+        if (mode == SenseMode.POINTER) {
+            lastPointerX = s.noseX
+            lastPointerY = s.noseY
+            lastMove = filter?.feed(s.tMs, s.noseX, s.noseY, true) ?: lastMove
+        }
+        // The blink peak is printed even when nothing fires, so the threshold is a number on the
+        // screen instead of a guess about his eyes.
+        blinkPeak = max(blinkPeak, s.blink)
+        blinkSamples += 1
+        if (blinkSamples % 40 == 0) {
+            Air.note("probe: blink peak ${two(blinkPeak)} (close>0.55 open<0.25)")
+            Air.update { it.copy(blinkPeak = blinkPeak) }
+        }
+        overlay?.setStatus(statusFor())
         val b = blinkDecoder ?: return
         if (prefs.blinkEnabled) handle(b.feed(s.tMs, s.blink, true), s.tMs)
     }
 
     private fun onHand(s: HandSample) {
-        if (mode == SenseMode.GESTURE) countFrame(s.tMs)
-        if (prefs.showSkeleton) overlay?.setHand(if (s.present) s.pts else null, s.pinchRatio, pinchClose)
-        val d = handDecoder ?: return
-        if (mode == SenseMode.POINTER) trackPinchDrag(s)
-        handle(d.feed(s), s.tMs)
-        Air.update { it.copy(handVisible = s.present) }
+        if (noFaceSamples()) countFrame(s.tMs)
+        if (s.handIndex == 0) {
+            skel1[0] = null
+            lastPinch = s.pinchRatio
+        }
+        if (s.present && s.pts.size >= 24) {
+            if (s.handIndex == 1) skel1[0] = s.pts else skel0[0] = s.pts
+        }
+        if (prefs.showSkeleton) {
+            val list = ArrayList<FloatArray>(2)
+            skel0[0]?.let { list.add(it) }
+            skel1[0]?.let { list.add(it) }
+            overlay?.setHands(list, lastPinch, pinchClose)
+            Air.update { it.copy(hands = list.size, handVisible = !list.isEmpty()) }
+        } else {
+            Air.update { it.copy(handVisible = s.present, hands = if (s.present) 1 else 0) }
+        }
+        if (mode == SenseMode.HAND_POINTER && s.present) {
+            lastPointerX = s.indexX
+            lastPointerY = s.indexY
+            lastMove = filter?.feed(s.tMs, s.indexX, s.indexY, true) ?: lastMove
+            overlay?.setStatus(statusFor())
+        }
+        if (mode.isPointer && s.handIndex == 0) trackPinchDrag(s)
+        val decoder = handDecoders.getOrPut(s.handIndex) { HandDecoder(prefs.handCfg()) }
+        handle(decoder.feed(s), s.tMs)
+    }
+
+    /** In the modes where no face sample arrives, the hand sample drives the fps window. */
+    private fun noFaceSamples(): Boolean = mode == SenseMode.GESTURE || mode == SenseMode.PROX
+
+    private fun statusFor(): String = when {
+        !movedOnce && mode == SenseMode.POINTER -> "سر را تکان بده تا نشانگر راه بیفتد"
+        !movedOnce && mode == SenseMode.HAND_POINTER -> "انگشت را تکان بده تا نشانگر راه بیفتد"
+        mode == SenseMode.HAND_POINTER -> "نشانگر با انگشت"
+        else -> "نشانگر آماده"
     }
 
     /**
-     * Holding a pinch and moving the head is a drag: the pointer path is recorded while the
+     * Holding a pinch and moving the pointer source is a drag: the path is recorded while the
      * fingers stay closed and replayed as one stroke on release. The decoder still reports the
      * release as a pinch, so that event is swallowed when it became a drag instead.
      */
@@ -404,7 +429,7 @@ class AirService : Service(), SensorEventListener {
         return sqrt((fx * fx + fy * fy).toDouble()).toFloat()
     }
 
-    /** One second window: fps, and how many of those frames the model actually saw something in. */
+    /** One second window: fps and how many of those frames each model actually saw something in. */
     private fun countFrame(t: Long) {
         statsFrames += 1
         if (statsStartT == 0L) {
@@ -416,9 +441,10 @@ class AirService : Service(), SensorEventListener {
         if (t - statsStartT < 1000L) return
         val fps = (statsFrames * 1000L / (t - statsStartT)).toInt()
         val src = camSource
-        val probeText = if (src == null) "" else {
-            if (mode == SenseMode.GESTURE) "hand ${src.handSeen}/${src.handCount}"
-            else "face ${src.faceSeen}/${src.faceCount} · hand ${src.handSeen}/${src.handCount}"
+        val probeText = when {
+            src == null -> ""
+            mode == SenseMode.GESTURE -> "hand ${src.handSeen}/${src.handCount}"
+            else -> "face ${src.faceSeen}/${src.faceCount} · hand ${src.handSeen}/${src.handCount}"
         }
         Air.update {
             it.copy(
@@ -452,7 +478,6 @@ class AirService : Service(), SensorEventListener {
         }
         prox = s
         lastNear = false
-        lastNearT = 0L
         mgr.registerListener(this, s, SensorManager.SENSOR_DELAY_NORMAL)
         tick.postDelayed(runnable, TICK_MS)
         Air.update { it.copy(sourceUp = true) }
@@ -483,15 +508,15 @@ class AirService : Service(), SensorEventListener {
             Air.note("gesture ${g.name} -> ${a.name}")
             when (a) {
                 AirAction.RECENTER -> {
-                    if (lastNoseX >= 0f) {
-                        filter?.recenter(lastNoseX, lastNoseY)
+                    if (lastPointerX >= 0f) {
+                        filter?.recenter(lastPointerX, lastPointerY)
                         movedOnce = false
                         curX = 0.5f
                         curY = 0.5f
                         dwell?.reset()
-                        Air.note("pointer: neutral set, cursor back to center until the head moves")
+                        Air.note("pointer: neutral set, cursor back to center until the source moves")
                     } else {
-                        Air.note("pointer: no face in view, cannot set neutral")
+                        Air.note("pointer: no ${if (mode == SenseMode.HAND_POINTER) "hand" else "face"} in view, cannot set neutral")
                     }
                 }
                 else -> AirInputService.fire(a, curX * screenW(), curY * screenH())
@@ -503,7 +528,6 @@ class AirService : Service(), SensorEventListener {
         val s = prox ?: return
         if (e.sensor != s) return
         lastNear = e.values[0] < s.maximumRange
-        lastNearT = System.currentTimeMillis()
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
@@ -534,6 +558,10 @@ class AirService : Service(), SensorEventListener {
         metricsH = dm.heightPixels
         return metricsH
     }
+
+    private fun rgba(): Boolean = prefs.frameFormat == Prefs.FMT_RGBA
+
+    private fun two(v: Float): String = String.format(java.util.Locale.US, "%.2f", v)
 
     private fun buildNotification(): Notification {
         val open = PendingIntent.getActivity(
