@@ -72,7 +72,7 @@ class Prefs(ctx: Context) {
     /** Run the hand model once per N frames in pointer mode; 1 = every frame. */
     var handStride: Int
         get() = sp.getInt(K_STRIDE, 2)
-        set(v) = sp.edit().putInt(K_STRIDE, v.coerceIn(1, 6)).also { }
+        set(v) = sp.edit().putInt(K_STRIDE, v.coerceIn(1, 6)).apply()
 
     var gpuDelegate: Boolean
         get() = sp.getBoolean(K_GPU, true)

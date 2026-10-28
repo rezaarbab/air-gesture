@@ -20,6 +20,7 @@ import androidx.core.content.ContextCompat
 import com.google.mediapipe.framework.image.MediaImageBuilder
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
@@ -165,7 +166,7 @@ class CameraSource(
     private fun faceOptions(gpu: Boolean): FaceLandmarker.FaceLandmarkerOptions? = try {
         val base = BaseOptions.builder()
             .setModelAssetPath(FACE_MODEL)
-            .setDelegate(if (gpu) BaseOptions.Delegate.GPU else BaseOptions.Delegate.CPU)
+            .setDelegate(if (gpu) Delegate.GPU else Delegate.CPU)
             .build()
         FaceLandmarker.FaceLandmarkerOptions.builder()
             .setBaseOptions(base)
@@ -206,7 +207,7 @@ class CameraSource(
     private fun handOptions(gpu: Boolean): HandLandmarker.HandLandmarkerOptions? = try {
         val base = BaseOptions.builder()
             .setModelAssetPath(HAND_MODEL)
-            .setDelegate(if (gpu) BaseOptions.Delegate.GPU else BaseOptions.Delegate.CPU)
+            .setDelegate(if (gpu) Delegate.GPU else Delegate.CPU)
             .build()
         HandLandmarker.HandLandmarkerOptions.builder()
             .setBaseOptions(base)
