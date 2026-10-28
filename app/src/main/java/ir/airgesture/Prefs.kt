@@ -93,6 +93,15 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(K_SKEL, true)
         set(v) = sp.edit().putBoolean(K_SKEL, v).apply()
 
+    /**
+     * Which pixel format the camera is asked for. JPEG is the one that delivered frames on his
+     * phone from the first build; YUV is faster but this HAL may refuse to stream it, and that
+     * distinction is what the watchdog line in CameraSource is there to prove.
+     */
+    var frameFormat: String
+        get() = if (sp.getString(K_FMT, null) == FMT_YUV) FMT_YUV else FMT_JPEG
+        set(v) = sp.edit().putString(K_FMT, if (v == FMT_YUV) FMT_YUV else FMT_JPEG).apply()
+
     fun actionFor(g: AirGesture, m: SenseMode): AirAction {
         val key = K_MAP + m.name + "." + g.name
         val fallback = AirAction.defaultFor(g, m).name
@@ -146,6 +155,9 @@ class Prefs(ctx: Context) {
         private const val K_GPU = "gpu"
         private const val K_ROT = "rot"
         private const val K_SKEL = "skeleton"
+        private const val K_FMT = "frame_format"
         private const val K_MAP = "map."
+        const val FMT_JPEG = "jpeg"
+        const val FMT_YUV = "yuv"
     }
 }

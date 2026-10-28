@@ -124,6 +124,9 @@ class AirService : Service(), SensorEventListener {
         false
     }
 
+    /** JPEG is the path proven to deliver frames on the test phone; YUV is selectable to A/B it. */
+    private fun jpeg(): Boolean = prefs.frameFormat != Prefs.FMT_YUV
+
     private fun begin() {
         // A reload lands on a live service: without tearing the old source down the cursor and
         // the proximity listener would be registered twice.
@@ -195,7 +198,7 @@ class AirService : Service(), SensorEventListener {
         startTreeThread()
         val src = CameraSource(applicationContext, ::onFace, ::onHand)
         camSource = src
-        if (!src.start(true, true, prefs.handStride, prefs.gpuDelegate, prefs.rotation)) {
+        if (!src.start(true, true, prefs.handStride, prefs.gpuDelegate, prefs.rotation, jpeg())) {
             Air.note("pointer: camera unavailable, falling back to proximity")
             // The cursor must not stay armed on a frozen position and click by itself.
             main.removeCallbacks(loop)
@@ -220,7 +223,7 @@ class AirService : Service(), SensorEventListener {
         attachDrawers()
         val src = CameraSource(applicationContext, ::onFace, ::onHand)
         camSource = src
-        if (!src.start(false, true, 1, prefs.gpuDelegate, prefs.rotation)) {
+        if (!src.start(false, true, 1, prefs.gpuDelegate, prefs.rotation, jpeg())) {
             Air.note("gesture: camera unavailable, falling back to proximity")
             detachDrawers()
             handDecoder = null

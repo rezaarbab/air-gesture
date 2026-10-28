@@ -3,9 +3,12 @@ package ir.airgesture.sense
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
-import android.hardware.camera2.CameraCharacteristics
+import android.graphics.Matrix
 import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
@@ -17,6 +20,7 @@ import android.os.SystemClock
 import android.util.Range
 import android.util.Size
 import androidx.core.content.ContextCompat
+import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.framework.image.MPImage
 import com.google.mediapipe.framework.image.MediaImageBuilder
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
@@ -34,15 +38,14 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 
 /**
- * One camera, two models, YUV frames handed straight to MediaPipe.
+ * One camera, two models, and instrumentation that answers the only question that matters when
+ * nothing is recognized: **did the camera deliver a frame at all?**
  *
- * The frames used to go JPEG -> Bitmap -> rotated Bitmap, and that plumbing cost more than the
- * model did. Now the sensor image goes in as it is and the rotation is declared through
- * ImageProcessingOptions, so nothing is decoded or copied per frame.
- *
- * Rotation is the part that decides whether anything is recognized at all: the palm detector has a
- * strong orientation prior, and a front camera needs (360 - sensorOrientation), not
- * sensorOrientation - the two differ by 180 degrees on most phones, which is upside down.
+ * Two pixel formats are kept deliberately, because they differ by exactly the change that broke
+ * recognition on the test phone: JPEG is decoded to a Bitmap and physically rotated (the path that
+ * worked from the first build), YUV_420_888 goes into MediaPipe without any copy and declares its
+ * rotation through ImageProcessingOptions (faster in theory). A watchdog logs which side failed
+ * within three seconds instead of leaving "nothing happened" as the only evidence.
  */
 class CameraSource(
     private val ctx: Context,
@@ -59,10 +62,12 @@ class CameraSource(
     private var hand: HandLandmarker? = null
 
     private var rotation = 0
+    private var jpeg = true
     private var frameIndex = 0
     private var stride = 2
     private var wantFace = false
     private var wantHand = false
+    private var openedAt = 0L
 
     private var faceTotalNs = 0L
     private var handTotalNs = 0L
@@ -77,6 +82,9 @@ class CameraSource(
     @Volatile
     private var running = false
 
+    @Volatile
+    private var framesDelivered = 0
+
     val faceAvgMs: Float get() = if (faceCount == 0) 0f else faceTotalNs.toFloat() / faceCount / 1e6f
     val handAvgMs: Float get() = if (handCount == 0) 0f else handTotalNs.toFloat() / handCount / 1e6f
     var frameW = 0; private set
@@ -88,6 +96,7 @@ class CameraSource(
         handStride: Int,
         preferGpu: Boolean,
         rotationOverride: Int,
+        wantJpeg: Boolean,
     ): Boolean {
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED
@@ -111,20 +120,18 @@ class CameraSource(
             Air.note("cam: getCameraCharacteristics threw ${e.javaClass.simpleName}")
             return false
         }
-        val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-        rotation = if (rotationOverride >= 0) {
-            rotationOverride
-        } else {
-            (360 - sensorOrientation) % 360
-        }
+        jpeg = wantJpeg
         wantFace = needFace
         wantHand = needHand
         stride = handStride.coerceIn(1, 6)
-        val size = pickSize(chars)
+        val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        rotation = if (rotationOverride >= 0) rotationOverride else (360 - sensorOrientation) % 360
+        val fmt = if (jpeg) ImageFormat.JPEG else ImageFormat.YUV_420_888
+        val size = pickSize(chars, fmt)
         frameW = size.width
         frameH = size.height
-        lastProbe = "${frameW}x$frameH rot=$rotation sensor=$sensorOrientation"
-        Air.note("cam: sensor $sensorOrientation -> rotation $rotation (override $rotationOverride), frame $frameW x $frameH")
+        lastProbe = "${if (jpeg) "JPEG" else "YUV"} $frameW x $frameH rot=$rotation"
+        Air.note("cam: format=${if (jpeg) "JPEG" else "YUV"} sensor=$sensorOrientation -> rotation=$rotation, frame $frameW x $frameH")
 
         if (needFace && openFace(preferGpu) == null) return false
         if (needHand && openHand(preferGpu) == null) return false
@@ -134,14 +141,35 @@ class CameraSource(
         t.start()
         worker = Handler(t.looper)
         return try {
-            val r = ImageReader.newInstance(frameW, frameH, ImageFormat.YUV_420_888, 2)
+            val r = ImageReader.newInstance(frameW, frameH, fmt, 2)
             r.setOnImageAvailableListener(onFrame, worker)
             reader = r
+            framesDelivered = 0
+            openedAt = SystemClock.elapsedRealtime()
             mgr.openCamera(camId, stateCallback, worker)
+            worker?.postDelayed(watchdog, WATCHDOG_MS)
             true
         } catch (e: Exception) {
             Air.note("cam: openCamera threw ${e.javaClass.simpleName}: ${e.message}")
             false
+        }
+    }
+
+    /** The single line that decides camera-side versus model-side. */
+    private val watchdog = object : Runnable {
+        override fun run() {
+            if (!running) {
+                Air.note("cam: session never configured (HAL refused the request)")
+                return
+            }
+            if (framesDelivered == 0) {
+                Air.note(
+                    "cam: NO FRAME DELIVERED in ${WATCHDOG_MS}ms with ${if (jpeg) "JPEG" else "YUV"} " +
+                        "$frameW x $frameH - switch the frame format in Home",
+                )
+            } else {
+                Air.note("cam: $framesDelivered frames in the first ${WATCHDOG_MS}ms")
+            }
         }
     }
 
@@ -154,18 +182,15 @@ class CameraSource(
     }
 
     /**
-     * 640x480 is enough for both models and leaves frame budget for the pipeline; square or huge
-     * sizes only slow it down, so score aspect first, then distance from that target, and ignore
-     * anything above 1080p.
+     * 640x480 is enough for both models. Sizes are taken from the format actually being opened -
+     * asking for a YUV size while streaming JPEG is how a session ends up configured but silent.
      */
-    private fun pickSize(chars: CameraCharacteristics): Size {
+    private fun pickSize(chars: CameraCharacteristics, fmt: Int): Size {
         val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) as? StreamConfigurationMap
-        val all: Array<Size> = map?.getOutputSizes(ImageFormat.YUV_420_888) ?: emptyArray()
+        val all: Array<Size> = map?.getOutputSizes(fmt) ?: emptyArray()
         val usable = all.filter { it.width in 320..1280 && it.height in 240..960 }
         val pool: List<Size> = if (usable.isEmpty()) all.toList() else usable
-        if (pool.size != all.size) {
-            Air.note("cam: ${all.size} YUV sizes offered, ${pool.size} in the 320-1280 band")
-        }
+        Air.note("cam: ${all.size} sizes offered for ${if (jpeg) "JPEG" else "YUV"}, ${pool.size} in the 320-1280 band")
         val best = pool.minByOrNull {
             abs(0.75f - it.width.toFloat() / it.height.toFloat()) * 3f +
                 abs(it.width - 640) / 640f * 0.4f + abs(it.height - 480) / 480f * 0.4f
@@ -293,16 +318,17 @@ class CameraSource(
                 val req = cam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
                 req.addTarget(surface)
                 req.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(15, 30))
+                if (jpeg) req.set(CaptureRequest.JPEG_QUALITY, 80.toByte())
                 s.setRepeatingRequest(req.build(), null, worker)
                 running = true
-                Air.note("cam: streaming $lastProbe, hand stride $stride")
+                Air.note("cam: streaming ${if (jpeg) "JPEG" else "YUV"} $frameW x $frameH rot=$rotation, hand stride $stride")
             } catch (e: Exception) {
                 Air.note("cam: repeating request refused ${e.javaClass.simpleName}: ${e.message}")
             }
         }
 
         override fun onConfigureFailed(s: CameraCaptureSession) {
-            Air.note("cam: capture session configuration failed")
+            Air.note("cam: capture session configuration failed (size or format refused)")
         }
     }
 
@@ -314,15 +340,31 @@ class CameraSource(
             Air.note("cam: acquireLatestImage threw ${e.javaClass.simpleName}")
             null
         } ?: return@OnImageAvailableListener
+        framesDelivered += 1
+        if (framesDelivered == 1) {
+            Air.note("cam: first frame after ${SystemClock.elapsedRealtime() - openedAt}ms")
+        }
         var mp: MPImage? = null
+        var bmp: Bitmap? = null
         try {
-            mp = MediaImageBuilder(img).build()
             val ts = SystemClock.elapsedRealtime()
-            val proc = ImageProcessingOptions.builder().setRotationDegrees(rotation).build()
             frameIndex += 1
             val doHand = wantHand && (frameIndex % stride == 0)
-            if (wantFace) runFace(ts, proc, mp)
-            if (doHand) runHand(ts, proc, mp)
+            if (jpeg) {
+                bmp = decodeJpeg(img)
+                if (bmp == null) {
+                    if (framesDelivered <= 3) Air.note("cam: JPEG frame did not decode")
+                } else {
+                    mp = BitmapImageBuilder(bmp).build()
+                    if (wantFace) runFace(ts, mp)
+                    if (doHand) runHand(ts, mp)
+                }
+            } else {
+                mp = MediaImageBuilder(img).build()
+                val proc = ImageProcessingOptions.builder().setRotationDegrees(rotation).build()
+                if (wantFace) runFaceYuv(ts, proc, mp)
+                if (doHand) runHandYuv(ts, proc, mp)
+            }
             reportProgress()
         } catch (e: Exception) {
             Air.note("cam: frame pipeline threw ${e.javaClass.simpleName}: ${e.message}")
@@ -333,31 +375,61 @@ class CameraSource(
                 Air.note("cam: image release threw ${e.javaClass.simpleName}")
             }
             img.close()
+            if (bmp != null && !bmp.isRecycled) bmp.recycle()
         }
     }
 
+    private fun decodeJpeg(img: android.media.Image): Bitmap? {
+        val plane = img.planes[0]
+        val buf = plane.buffer
+        val bytes = ByteArray(buf.remaining())
+        buf.get(bytes)
+        val raw = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+        // Exactly what the working build did: rotate the bitmap clockwise by `rotation`. Not the
+        // complement - the complement is 180 degrees off and is how "nothing is recognized" started.
+        if (rotation % 360 == 0) return raw
+        val m = Matrix()
+        m.postRotate(rotation.toFloat())
+        val out = Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, false)
+        if (out !== raw) raw.recycle()
+        return out
+    }
+
     /**
-     * One line every 60 frames, per model: how many frames actually carried something. That ratio
-     * is what separates "the camera or rotation is wrong" from "the thresholds are too strict" -
-     * without it a report of "it does not recognize" has no direction.
+     * Every 20 frames each model prints found-in-N-of-M and its own average milliseconds. Zero
+     * lines at all means frames are not arriving (camera side); "0 of 20" means the image is
+     * reaching the model but nothing is recognized (orientation, light, or distance).
      */
     private fun reportProgress() {
-        if (wantFace && faceCount > 0 && faceCount % 60 == 0) {
+        if (wantFace && faceCount > 0 && faceCount % 20 == 0) {
             Air.note("probe: face found in $faceSeen of $faceCount frames, ${ms(faceAvgMs)} ms each")
         }
-        if (wantHand && handCount > 0 && handCount % 60 == 0) {
+        if (wantHand && handCount > 0 && handCount % 20 == 0) {
             Air.note("probe: hand found in $handSeen of $handCount frames, ${ms(handAvgMs)} ms each")
         }
     }
 
     private fun ms(v: Float): String = String.format(java.util.Locale.US, "%.1f", v)
 
-    private fun runFace(ts: Long, proc: ImageProcessingOptions, mp: MPImage) {
+    private fun runFace(ts: Long, mp: MPImage) {
+        val m = face ?: return
+        val t0 = System.nanoTime()
+        val res = m.detectForVideo(mp, ts)
+        faceTotalNs += System.nanoTime() - t0
+        faceCount += 1
+        emitFace(ts, res)
+    }
+
+    private fun runFaceYuv(ts: Long, proc: ImageProcessingOptions, mp: MPImage) {
         val m = face ?: return
         val t0 = System.nanoTime()
         val res = m.detectForVideo(mp, proc, ts)
         faceTotalNs += System.nanoTime() - t0
         faceCount += 1
+        emitFace(ts, res)
+    }
+
+    private fun emitFace(ts: Long, res: FaceLandmarkerResult) {
         val faces = res.faceLandmarks()
         if (faces.isEmpty() || faces[0].size < 2) {
             onFace(FaceSample(ts, false, 0f, 0f, 0f))
@@ -365,15 +437,28 @@ class CameraSource(
         }
         faceSeen += 1
         val nose = faces[0][NOSE_TIP]
-        onFace(FaceSample(ts, true, nose.x(), nose.y(), blinkScore(res, ts)))
+        onFace(FaceSample(ts, true, nose.x(), nose.y(), blinkScore(res)))
     }
 
-    private fun runHand(ts: Long, proc: ImageProcessingOptions, mp: MPImage) {
+    private fun runHand(ts: Long, mp: MPImage) {
+        val m = hand ?: return
+        val t0 = System.nanoTime()
+        val hands = m.detectForVideo(mp, ts).landmarks()
+        handTotalNs += System.nanoTime() - t0
+        handCount += 1
+        emitHand(ts, hands)
+    }
+
+    private fun runHandYuv(ts: Long, proc: ImageProcessingOptions, mp: MPImage) {
         val m = hand ?: return
         val t0 = System.nanoTime()
         val hands = m.detectForVideo(mp, proc, ts).landmarks()
         handTotalNs += System.nanoTime() - t0
         handCount += 1
+        emitHand(ts, hands)
+    }
+
+    private fun emitHand(ts: Long, hands: List<List<NormalizedLandmark>>) {
         if (hands.isEmpty() || hands[0].size < 10) {
             onHand(HandSample(ts, false, 0f, 0f, 1f, 0f))
             return
@@ -383,7 +468,7 @@ class CameraSource(
     }
 
     /** The blendshape list is named; if the names ever change, say so instead of inventing a score. */
-    private fun blinkScore(res: FaceLandmarkerResult, ts: Long): Float {
+    private fun blinkScore(res: FaceLandmarkerResult): Float {
         val groups = res.faceBlendshapes()
         if (groups == null || !groups.isPresent) return 0f
         val list = groups.get()
@@ -424,6 +509,7 @@ class CameraSource(
 
     fun stop() {
         running = false
+        worker?.removeCallbacks(watchdog)
         try {
             session?.close()
         } catch (e: Exception) {
@@ -460,5 +546,6 @@ class CameraSource(
         const val FACE_MODEL = "face_landmarker.task"
         const val HAND_MODEL = "hand_landmarker.task"
         const val NOSE_TIP = 1
+        const val WATCHDOG_MS = 3000L
     }
 }

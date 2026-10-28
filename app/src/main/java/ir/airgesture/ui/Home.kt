@@ -61,6 +61,7 @@ fun Home() {
     var agility by remember { mutableStateOf(prefs.proxAgility) }
     var rot by remember { mutableStateOf(prefs.rotation) }
     var gpu by remember { mutableStateOf(prefs.gpuDelegate) }
+    var fmt by remember { mutableStateOf(prefs.frameFormat) }
 
     val camLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         Air.note(if (granted) "perm: camera granted" else "perm: camera denied, pointer and hand modes cannot run")
@@ -196,6 +197,17 @@ fun Home() {
                     apply(prefs, snap.running, ctx)
                 }
                 Hint("خودکار = (۳۶۰ منهای زاویهٔ سنسور). اگر دست یا چهره هیچ‌وقت پیدا نشد، یکی از ۹۰/۲۷۰ را امتحان کن: مدل کف دست به جهت‌گیری حساس است.")
+                Text("فرمت فریم", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp, bottom = 6.dp))
+                Segmented(listOf("JPEG (اثبات‌شده)", "YUV (سریع‌تر)"), if (fmt == Prefs.FMT_YUV) 1 else 0) { i ->
+                    fmt = if (i == 1) Prefs.FMT_YUV else Prefs.FMT_JPEG
+                    prefs.frameFormat = fmt
+                    apply(prefs, snap.running, ctx)
+                }
+                Hint(
+                    "JPEG همان مسیری است که در گوشی تو فریم می‌داد. اگر با YUV در تب تشخیص خط «NO FRAME DELIVERED» " +
+                        "دیدی، یعنی HAL این گوشی YUV را روی این سطح استریم نمی‌کند؛ برگردان روی JPEG. " +
+                        "اگر «found in 0 of 20» دیدی، فریم می‌آید و مشکل جهت/نور است، نه دوربین.",
+                )
                 ToggleLine("delegate روی GPU", "سریع‌تر؛ اگر رام رد کند خودش به CPU برمی‌گردد", gpu) {
                     gpu = it
                     prefs.gpuDelegate = it
