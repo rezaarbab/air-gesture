@@ -12,9 +12,13 @@ android {
         applicationId = "ir.airgesture"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
+        versionCode = 3
         // The build marker is printed on the diagnostics tab, so a report always says which build ran.
-        versionName = "2.0-" + (System.getenv("GITHUB_SHA")?.take(7) ?: "ci")
+        versionName = "3.0-" + (System.getenv("GITHUB_SHA")?.take(7) ?: "ci")
+        ndk {
+            // 64-bit only, as asked: MediaPipe also ships armeabi-v7a/x86 libs and they are dead weight.
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     signingConfigs {

@@ -4,8 +4,8 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
-import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
@@ -17,6 +17,7 @@ import android.os.SystemClock
 import android.util.Range
 import android.util.Size
 import androidx.core.content.ContextCompat
+import com.google.mediapipe.framework.image.MPImage
 import com.google.mediapipe.framework.image.MediaImageBuilder
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.core.BaseOptions
@@ -24,11 +25,13 @@ import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.core.ImageProcessingOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarker
+import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import ir.airgesture.Air
 import ir.airgesture.decode.FaceSample
 import ir.airgesture.decode.HandSample
 import kotlin.math.abs
+import kotlin.math.sqrt
 
 /**
  * One camera, two models, YUV frames handed straight to MediaPipe.
@@ -37,9 +40,9 @@ import kotlin.math.abs
  * model did. Now the sensor image goes in as it is and the rotation is declared through
  * ImageProcessingOptions, so nothing is decoded or copied per frame.
  *
- * In pointer mode the face model runs every frame (the cursor needs it) and the hand model every
- * Nth frame (a pinch lasts hundreds of milliseconds, so sampling it at a tenth of the rate costs
- * nothing the user can feel and buys back most of the frame time).
+ * Rotation is the part that decides whether anything is recognized at all: the palm detector has a
+ * strong orientation prior, and a front camera needs (360 - sensorOrientation), not
+ * sensorOrientation - the two differ by 180 degrees on most phones, which is upside down.
  */
 class CameraSource(
     private val ctx: Context,
@@ -62,10 +65,14 @@ class CameraSource(
     private var wantHand = false
 
     private var faceTotalNs = 0L
-    private var faceCount = 0
     private var handTotalNs = 0L
-    private var handCount = 0
     private var blinkNameMisses = 0
+
+    var faceCount = 0; private set
+    var handCount = 0; private set
+    var faceSeen = 0; private set
+    var handSeen = 0; private set
+    var lastProbe = ""; private set
 
     @Volatile
     private var running = false
@@ -75,7 +82,13 @@ class CameraSource(
     var frameW = 0; private set
     var frameH = 0; private set
 
-    fun start(needFace: Boolean, needHand: Boolean, handStride: Int, preferGpu: Boolean): Boolean {
+    fun start(
+        needFace: Boolean,
+        needHand: Boolean,
+        handStride: Int,
+        preferGpu: Boolean,
+        rotationOverride: Int,
+    ): Boolean {
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA)
             != PackageManager.PERMISSION_GRANTED
         ) {
@@ -92,12 +105,26 @@ class CameraSource(
             Air.note("cam: no front-facing camera on this device")
             return false
         }
+        val chars = try {
+            mgr.getCameraCharacteristics(camId)
+        } catch (e: Exception) {
+            Air.note("cam: getCameraCharacteristics threw ${e.javaClass.simpleName}")
+            return false
+        }
+        val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        rotation = if (rotationOverride >= 0) {
+            rotationOverride
+        } else {
+            (360 - sensorOrientation) % 360
+        }
         wantFace = needFace
         wantHand = needHand
         stride = handStride.coerceIn(1, 6)
-        val size = pickSize(mgr, camId)
+        val size = pickSize(chars)
         frameW = size.width
         frameH = size.height
+        lastProbe = "${frameW}x$frameH rot=$rotation sensor=$sensorOrientation"
+        Air.note("cam: sensor $sensorOrientation -> rotation $rotation (override $rotationOverride), frame $frameW x $frameH")
 
         if (needFace && openFace(preferGpu) == null) return false
         if (needHand && openHand(preferGpu) == null) return false
@@ -107,8 +134,6 @@ class CameraSource(
         t.start()
         worker = Handler(t.looper)
         return try {
-            rotation = mgr.getCameraCharacteristics(camId)
-                .get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
             val r = ImageReader.newInstance(frameW, frameH, ImageFormat.YUV_420_888, 2)
             r.setOnImageAvailableListener(onFrame, worker)
             reader = r
@@ -128,13 +153,22 @@ class CameraSource(
         return null
     }
 
-    private fun pickSize(mgr: CameraManager, camId: String): Size {
-        val map = mgr.getCameraCharacteristics(camId)
-            .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) as? StreamConfigurationMap
-        val sizes = map?.getOutputSizes(ImageFormat.YUV_420_888)
-        val best = sizes?.minByOrNull {
-            abs(0.75f - it.width.toFloat() / it.height.toFloat()) +
-                abs(it.width - 640) / 10000f + abs(it.height - 480) / 10000f
+    /**
+     * 640x480 is enough for both models and leaves frame budget for the pipeline; square or huge
+     * sizes only slow it down, so score aspect first, then distance from that target, and ignore
+     * anything above 1080p.
+     */
+    private fun pickSize(chars: CameraCharacteristics): Size {
+        val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) as? StreamConfigurationMap
+        val all = map?.getOutputSizes(ImageFormat.YUV_420_888) ?: arrayOf()
+        val usable = all.filter { it.width in 320..1280 && it.height in 240..960 }
+        val pool = if (usable.isEmpty()) all else usable
+        if (pool.size != all.size) {
+            Air.note("cam: ${all.size} YUV sizes offered, ${pool.size} in the 320-1280 band")
+        }
+        val best = pool.minByOrNull {
+            abs(0.75f - it.width.toFloat() / it.height.toFloat()) * 3f +
+                abs(it.width - 640) / 640f * 0.4f + abs(it.height - 480) / 480f * 0.4f
         }
         return best ?: Size(640, 480)
     }
@@ -144,7 +178,7 @@ class CameraSource(
         val opts = faceOptions(preferGpu) ?: return null
         return try {
             FaceLandmarker.createFromOptions(ctx, opts).also {
-                Air.note("model: face on ${if (preferGpu) "GPU" else "CPU"}, $frameW x $frameH")
+                Air.note("model: face on ${if (preferGpu) "GPU" else "CPU"}")
             }
         } catch (e: Exception) {
             if (preferGpu) {
@@ -172,8 +206,8 @@ class CameraSource(
             .setBaseOptions(base)
             .setRunningMode(RunningMode.VIDEO)
             .setNumFaces(1)
-            .setMinFaceDetectionConfidence(0.5f)
-            .setMinFacePresenceConfidence(0.5f)
+            .setMinFaceDetectionConfidence(0.4f)
+            .setMinFacePresenceConfidence(0.4f)
             .setOutputFaceBlendshapes(true)
             .build()
     } catch (e: Exception) {
@@ -213,9 +247,9 @@ class CameraSource(
             .setBaseOptions(base)
             .setRunningMode(RunningMode.VIDEO)
             .setNumHands(1)
-            .setMinHandDetectionConfidence(0.5f)
-            .setMinHandPresenceConfidence(0.5f)
-            .setMinTrackingConfidence(0.5f)
+            .setMinHandDetectionConfidence(0.4f)
+            .setMinHandPresenceConfidence(0.4f)
+            .setMinTrackingConfidence(0.4f)
             .build()
     } catch (e: Exception) {
         Air.note("model: hand options rejected (${e.javaClass.simpleName}: ${e.message})")
@@ -258,10 +292,10 @@ class CameraSource(
             try {
                 val req = cam.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
                 req.addTarget(surface)
-                req.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(20, 30))
+                req.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(15, 30))
                 s.setRepeatingRequest(req.build(), null, worker)
                 running = true
-                Air.note("cam: streaming $frameW x $frameH, rotation $rotation, hand stride $stride")
+                Air.note("cam: streaming $lastProbe, hand stride $stride")
             } catch (e: Exception) {
                 Air.note("cam: repeating request refused ${e.javaClass.simpleName}: ${e.message}")
             }
@@ -280,7 +314,7 @@ class CameraSource(
             Air.note("cam: acquireLatestImage threw ${e.javaClass.simpleName}")
             null
         } ?: return@OnImageAvailableListener
-        var mp: com.google.mediapipe.framework.image.MPImage? = null
+        var mp: MPImage? = null
         try {
             mp = MediaImageBuilder(img).build()
             val ts = SystemClock.elapsedRealtime()
@@ -289,6 +323,7 @@ class CameraSource(
             val doHand = wantHand && (frameIndex % stride == 0)
             if (wantFace) runFace(ts, proc, mp)
             if (doHand) runHand(ts, proc, mp)
+            reportProgress()
         } catch (e: Exception) {
             Air.note("cam: frame pipeline threw ${e.javaClass.simpleName}: ${e.message}")
         } finally {
@@ -301,7 +336,23 @@ class CameraSource(
         }
     }
 
-    private fun runFace(ts: Long, proc: ImageProcessingOptions, mp: com.google.mediapipe.framework.image.MPImage) {
+    /**
+     * One line every 60 frames, per model: how many frames actually carried something. That ratio
+     * is what separates "the camera or rotation is wrong" from "the thresholds are too strict" -
+     * without it a report of "it does not recognize" has no direction.
+     */
+    private fun reportProgress() {
+        if (wantFace && faceCount > 0 && faceCount % 60 == 0) {
+            Air.note("probe: face found in $faceSeen of $faceCount frames, ${ms(faceAvgMs)} ms each")
+        }
+        if (wantHand && handCount > 0 && handCount % 60 == 0) {
+            Air.note("probe: hand found in $handSeen of $handCount frames, ${ms(handAvgMs)} ms each")
+        }
+    }
+
+    private fun ms(v: Float): String = String.format(java.util.Locale.US, "%.1f", v)
+
+    private fun runFace(ts: Long, proc: ImageProcessingOptions, mp: MPImage) {
         val m = face ?: return
         val t0 = System.nanoTime()
         val res = m.detectForVideo(mp, proc, ts)
@@ -312,11 +363,12 @@ class CameraSource(
             onFace(FaceSample(ts, false, 0f, 0f, 0f))
             return
         }
+        faceSeen += 1
         val nose = faces[0][NOSE_TIP]
         onFace(FaceSample(ts, true, nose.x(), nose.y(), blinkScore(res, ts)))
     }
 
-    private fun runHand(ts: Long, proc: ImageProcessingOptions, mp: com.google.mediapipe.framework.image.MPImage) {
+    private fun runHand(ts: Long, proc: ImageProcessingOptions, mp: MPImage) {
         val m = hand ?: return
         val t0 = System.nanoTime()
         val hands = m.detectForVideo(mp, proc, ts).landmarks()
@@ -326,12 +378,12 @@ class CameraSource(
             onHand(HandSample(ts, false, 0f, 0f, 1f, 0f))
             return
         }
-        val lm = hands[0]
-        onHand(toSample(ts, lm))
+        handSeen += 1
+        onHand(toSample(ts, hands[0]))
     }
 
     /** The blendshape list is named; if the names ever change, say so instead of inventing a score. */
-    private fun blinkScore(res: com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult, ts: Long): Float {
+    private fun blinkScore(res: FaceLandmarkerResult, ts: Long): Float {
         val groups = res.faceBlendshapes()
         if (groups == null || !groups.isPresent) return 0f
         val list = groups.get()
@@ -360,9 +412,14 @@ class CameraSource(
         val gapY = thumb.y() - index.y()
         val spanX = wrist.x() - middleBase.x()
         val spanY = wrist.y() - middleBase.y()
-        val span = kotlin.math.sqrt(spanX * spanX + spanY * spanY).coerceAtLeast(0.02f)
-        val gap = kotlin.math.sqrt(gapX * gapX + gapY * gapY)
-        return HandSample(ts, true, wrist.x(), wrist.y(), gap / span, span)
+        val span = sqrt(spanX * spanX + spanY * spanY).coerceAtLeast(0.02f)
+        val gap = sqrt(gapX * gapX + gapY * gapY)
+        val pts = FloatArray(lm.size * 2)
+        for (i in lm.indices) {
+            pts[i * 2] = lm[i].x()
+            pts[i * 2 + 1] = lm[i].y()
+        }
+        return HandSample(ts, true, wrist.x(), wrist.y(), gap / span, span, pts)
     }
 
     fun stop() {

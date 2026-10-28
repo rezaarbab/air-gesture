@@ -4,9 +4,12 @@ package ir.airgesture.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -19,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -41,30 +45,39 @@ fun Mapping() {
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(bottom = 20.dp),
+            .padding(bottom = 26.dp),
     ) {
-        Panel("نگاشت — ${mode.title}") {
+        SectionCard("نگاشت", mode.title) {
             gestures.forEach { g ->
                 val a = prefs.actionFor(g, mode)
-                val def = AirAction.defaultFor(g, mode)
-                Column(
-                    Modifier
+                Row(
+                    modifier = Modifier
                         .fillMaxWidth()
                         .clickable { picked = g }
-                        .padding(vertical = 9.dp),
+                        .padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(g.title, style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        if (a == def) "${a.title} (پیش‌فرض)" else a.title,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
+                    Column(Modifier.weight(1f)) {
+                        Text(g.title, style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            if (a == AirAction.defaultFor(g, mode)) "پیش‌فرض" else "شخصی",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+            Text(
+                        a.title,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = deepGreen,
+                        modifier = Modifier.padding(start = 8.dp),
                     )
+                    Spacer(Modifier.size(6.dp))
+                    Text("‹", style = MaterialTheme.typography.titleLarge, color = skyBlue)
                 }
             }
             Hint(
                 when (mode) {
-                    SenseMode.POINTER -> "در حالت نشانگر، «روی نشانگر» یعنی جایی که الان ایستاده؛ اگر حلقه روی دکمه‌ای نشسته باشد، کلیک همان‌جا می‌خورد."
-                    SenseMode.GESTURE -> "دست را ۳۰ تا ۶۰ سانتی‌متری جلوی دوربین نگه دار؛ نور کم تشخیص را افت می‌دهد."
+                    SenseMode.POINTER -> "«روی نشانگر» یعنی جایی که مکان‌نما ایستاده؛ اگر حلقه روی دکمه‌ای نشسته باشد، کلیک مرکز همان دکمه می‌خورد."
+                    SenseMode.GESTURE -> "دست ۳۰ تا ۶۰ سانتی‌متری جلوی دوربین؛ نور کم تشخیص را افت می‌دهد."
                     SenseMode.PROX -> "سنسور جهت را نمی‌فهمد، پس فقط تعداد و طول پنهان‌شدن دست معنی دارد."
                 },
             )
@@ -89,7 +102,7 @@ fun Mapping() {
                         ) {
                             Text(
                                 a.title,
-                                color = if (a == prefs.actionFor(g, mode)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                color = if (a == prefs.actionFor(g, mode)) deepGreen else MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.padding(vertical = 4.dp),
                             )
                         }

@@ -31,6 +31,10 @@ object Air {
         val cursorY: Float = 0.5f,
         val dwell: Float = 0f,
         val target: String = "",
+        val tracking: Boolean = false,
+        val moved: Boolean = false,
+        val probe: String = "",
+        val frameInfo: String = "",
     )
 
     val state = MutableStateFlow(Snap())

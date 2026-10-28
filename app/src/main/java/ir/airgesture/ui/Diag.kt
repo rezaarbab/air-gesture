@@ -33,6 +33,7 @@ fun Diag() {
     val snap by Air.state.collectAsState()
     val lines by Air.lines.collectAsState()
     val clip = LocalClipboardManager.current
+    val mode = remember { Prefs(ctx).mode }
     val version = remember {
         try {
             ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: "?"
@@ -45,56 +46,54 @@ fun Diag() {
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(bottom = 20.dp),
+            .padding(bottom = 26.dp),
     ) {
-        Panel("شمارش‌ها") {
-            Line("بیلد", version)
-            Line("حالت", Prefs(ctx).mode.title)
-            Line("سرویس", if (snap.running) "روشن" else "خاموش")
-            Line("منبع بالا آمده", if (snap.sourceUp) "بله" else "نه")
-            Line("چهره", if (snap.faceVisible) "دیده می‌شود" else "نیست")
-            Line("دست", if (snap.handVisible) "دیده می‌شود" else "نیست")
-            Line("فریم بر ثانیه", "${snap.fps}")
-            Line("زمان مدل چهره", "${ms(snap.faceMs)} ms")
-            Line("زمان مدل دست", "${ms(snap.handMs)} ms")
-            Line("نشانگر", "${num(snap.cursorX)} , ${num(snap.cursorY)}")
-            Line("حلقهٔ توقف", "${(snap.dwell * 100).toInt()}% روی «${snap.target}»")
-            Line("فریم‌های خوانده‌شده", "${snap.frames}")
-            Line("اشاره‌های ثبت‌شده", "${snap.gestures}")
-            Line("آخرین اشاره", "${snap.lastGesture} → ${snap.lastAction}")
+        SectionCard("شمارش‌ها", "اگر جایی صفر است، آن مسیر اجرا نشده") {
+            KeyLine("نسخه", version)
+            KeyLine("حالت", mode.title)
+            KeyLine("سرویس", if (snap.running) "روشن" else "خاموش")
+            KeyLine("دسترسی", if (snap.accReady) "وصل" else "وصل نیست", snap.accReady)
+            KeyLine("منبع", if (snap.sourceUp) "بالا آمده" else "بالا نیامده", snap.sourceUp)
+            KeyLine("قاب / چرخش", if (snap.frameInfo.isEmpty()) "—" else snap.frameInfo)
+            KeyLine("چهره", if (snap.faceVisible) "دیده می‌شود" else "نیست", snap.faceVisible)
+            KeyLine("دست", if (snap.handVisible) "دیده می‌شود" else "نیست", snap.handVisible)
+            KeyLine("framerate", "${snap.fps}", snap.fps > 12)
+            KeyLine("مدل‌ها", "face ${ms(snap.faceMs)} · hand ${ms(snap.handMs)} ms")
+            KeyLine("دیدن/فریم", if (snap.probe.isEmpty()) "—" else snap.probe, snap.probe.contains("/"))
+            KeyLine("نشانگر", "${num(snap.cursorX)} , ${num(snap.cursorY)}  (حرکت کرد: ${if (snap.moved) "بله" else "نه"})")
+            KeyLine("حلقه", "${(snap.dwell * 100).toInt()}%  «${snap.target}»")
+            KeyLine("فریم‌ها", "${snap.frames}")
+            KeyLine("اشاره‌ها", "${snap.gestures}")
             OutlinedButton(
                 onClick = {
                     clip.setText(AnnotatedString(lines.joinToString("\n") { "${Air.stamp(it.t)} ${it.text}" }))
                     Air.note("diag: log copied to clipboard")
                 },
-                modifier = Modifier.padding(top = 8.dp),
+                modifier = Modifier.padding(top = 10.dp),
             ) { Text("کپی لاگ") }
         }
-        Panel("رویدادها") {
+
+        SectionCard("رویدادها") {
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 120.dp, max = 420.dp)
+                    .heightIn(min = 140.dp, max = 460.dp)
                     .verticalScroll(rememberScrollState()),
             ) {
                 if (lines.isEmpty()) {
-                    Text("چیزی اینجا نیست، یعنی سرویس اصلاً اجرا نشده است.", color = MaterialTheme.colorScheme.error)
+                    Text("چیزی اینجا نیست، یعنی سرویس اصلاً اجرا نشده است.", color = coralError)
                 }
                 lines.reversed().forEach { l ->
                     Text(
                         "${Air.stamp(l.t)}  ${l.text}",
                         fontFamily = FontFamily.Monospace,
                         style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(vertical = 1.dp),
                     )
                 }
             }
         }
     }
-}
-
-@Composable
-private fun Line(k: String, v: String) {
-    Text("$k: $v", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 2.dp))
 }
 
 private fun ms(v: Float): String = String.format(java.util.Locale.US, "%.1f", v)

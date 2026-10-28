@@ -78,6 +78,21 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(K_GPU, true)
         set(v) = sp.edit().putBoolean(K_GPU, v).apply()
 
+    /**
+     * Degrees the frame is rotated before inference. -1 = derive it from the sensor
+     * (front camera needs (360 - sensorOrientation), which is not the same number); the override
+     * exists because hand and face detectors are orientation-sensitive and I cannot test on his
+     * phone from here.
+     */
+    var rotation: Int
+        get() = sp.getInt(K_ROT, -1)
+        set(v) = sp.edit().putInt(K_ROT, v).apply()
+
+    /** Draw the recognized hand as a live skeleton instead of only a status line. */
+    var showSkeleton: Boolean
+        get() = sp.getBoolean(K_SKEL, true)
+        set(v) = sp.edit().putBoolean(K_SKEL, v).apply()
+
     fun actionFor(g: AirGesture, m: SenseMode): AirAction {
         val key = K_MAP + m.name + "." + g.name
         val fallback = AirAction.defaultFor(g, m).name
@@ -129,6 +144,8 @@ class Prefs(ctx: Context) {
         private const val K_BLINK = "blink"
         private const val K_STRIDE = "stride"
         private const val K_GPU = "gpu"
+        private const val K_ROT = "rot"
+        private const val K_SKEL = "skeleton"
         private const val K_MAP = "map."
     }
 }
