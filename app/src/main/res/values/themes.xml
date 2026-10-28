@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.AirGesture" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#0B1013</item>
+    </style>
+    <color name="ic_launcher_bg">#0B1013</color>
+</resources>

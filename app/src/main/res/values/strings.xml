@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">اشاره</string>
+    <string name="accessibility_label">اشاره — کنترل بدون لمس</string>
+    <string name="accessibility_description">حرکت دست را از دوربین جلو یا سنسور مجاورت می‌خواند و همان حرکت را به‌جای انگشت شما روی صفحه اجرا می‌کند. بدون روت، فقط با این مجوز.</string>
+    <string name="notif_channel">کنترل با اشاره</string>
+    <string name="notif_idle">آمادهٔ خواندن اشاره</string>
+    <string name="stop">توقف</string>
+</resources>
