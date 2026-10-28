@@ -22,6 +22,8 @@ OUT=$(mktemp -d)
 java -cp "$CC:$STD:$REF:$TROVE:$CORO:$ANN" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler \
   "$ROOT"/app/src/main/java/ir/airgesture/decode/*.kt \
   "$ROOT"/app/src/main/java/ir/airgesture/model/*.kt \
+  "$ROOT"/app/src/main/java/ir/airgesture/pointer/PointerFilter.kt \
+  "$ROOT"/app/src/main/java/ir/airgesture/pointer/DwellTracker.kt \
   "$ROOT"/tools/decodertest/Main.kt \
   -classpath "$STD" -d "$OUT" -nowarn
 

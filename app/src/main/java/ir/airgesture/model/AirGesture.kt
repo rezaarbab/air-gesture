@@ -1,19 +1,19 @@
 package ir.airgesture.model
 
-enum class Source { HAND, PROX }
-
 /** A recognised movement, before anybody decides what it means. */
-enum class AirGesture(val title: String, val source: Source) {
-    SWIPE_UP("دست به بالا", Source.HAND),
-    SWIPE_DOWN("دست به پایین", Source.HAND),
-    PINCH("یک پینچ", Source.HAND),
-    DOUBLE_PINCH("دو پینچ پشت هم", Source.HAND),
-    PALM_HOLD("کف باز ثابت", Source.HAND),
-    WAVE("یک موج", Source.PROX),
-    DOUBLE_WAVE("دو موج پشت هم", Source.PROX),
-    COVER_LONG("پوشاندن طولانی", Source.PROX);
+enum class AirGesture(val title: String, val modes: Set<SenseMode>) {
+    SWIPE_UP("دست به بالا", setOf(SenseMode.GESTURE)),
+    SWIPE_DOWN("دست به پایین", setOf(SenseMode.GESTURE)),
+    PINCH("یک پینچ", setOf(SenseMode.POINTER, SenseMode.GESTURE)),
+    DOUBLE_PINCH("دو پینچ پشت هم", setOf(SenseMode.POINTER, SenseMode.GESTURE)),
+    PALM_HOLD("کف باز ثابت", setOf(SenseMode.GESTURE)),
+    BLINK("پلک", setOf(SenseMode.POINTER)),
+    WAVE("یک موج", setOf(SenseMode.PROX)),
+    DOUBLE_WAVE("دو موج پشت هم", setOf(SenseMode.PROX)),
+    COVER_LONG("پوشاندن طولانی", setOf(SenseMode.PROX));
 
     companion object {
         fun named(value: String): AirGesture? = entries.firstOrNull { it.name == value }
+        fun forMode(m: SenseMode): List<AirGesture> = entries.filter { it.modes.contains(m) }
     }
 }

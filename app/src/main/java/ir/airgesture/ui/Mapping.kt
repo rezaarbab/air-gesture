@@ -25,19 +25,16 @@ import androidx.compose.ui.unit.dp
 import ir.airgesture.Prefs
 import ir.airgesture.model.AirAction
 import ir.airgesture.model.AirGesture
-import ir.airgesture.model.Flavor
 import ir.airgesture.model.SenseMode
 import ir.airgesture.svc.AirService
 
-/** Every recognised movement on the left, what it should do on the right. */
+/** Every movement the current mode can produce, and what it should do. */
 @Composable
 fun Mapping() {
     val ctx = LocalContext.current
     val prefs = remember { Prefs(ctx) }
-    val prox = prefs.mode == SenseMode.PROX || !Flavor.hasHand
-    val gestures = remember(prox) {
-        AirGesture.entries.filter { if (prox) it.source == ir.airgesture.model.Source.PROX else it.source == ir.airgesture.model.Source.HAND }
-    }
+    val mode = prefs.mode
+    val gestures = remember(mode) { AirGesture.forMode(mode) }
     var picked by remember { mutableStateOf<AirGesture?>(null) }
 
     Column(
@@ -46,17 +43,30 @@ fun Mapping() {
             .verticalScroll(rememberScrollState())
             .padding(bottom = 20.dp),
     ) {
-        Panel("نگاشت اشاره‌ها") {
+        Panel("نگاشت — ${mode.title}") {
             gestures.forEach { g ->
-                Row2(
-                    left = g.title,
-                    right = prefs.actionFor(g).title,
-                    onClick = { picked = g },
-                )
+                val a = prefs.actionFor(g, mode)
+                val def = AirAction.defaultFor(g, mode)
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { picked = g }
+                        .padding(vertical = 9.dp),
+                ) {
+                    Text(g.title, style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        if (a == def) "${a.title} (پیش‌فرض)" else a.title,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
             Hint(
-                if (prox) "سنسور مجاورت جهت را نمی‌فهمد، پس فقط تعداد و طول پنهان‌شدن دست معنی دارد."
-                else "دست را ۳۰ تا ۶۰ سانتی‌متری جلوی دوربین نگه دار؛ نور کم تشخیص را افت می‌دهد.",
+                when (mode) {
+                    SenseMode.POINTER -> "در حالت نشانگر، «روی نشانگر» یعنی جایی که الان ایستاده؛ اگر حلقه روی دکمه‌ای نشسته باشد، کلیک همان‌جا می‌خورد."
+                    SenseMode.GESTURE -> "دست را ۳۰ تا ۶۰ سانتی‌متری جلوی دوربین نگه دار؛ نور کم تشخیص را افت می‌دهد."
+                    SenseMode.PROX -> "سنسور جهت را نمی‌فهمد، پس فقط تعداد و طول پنهان‌شدن دست معنی دارد."
+                },
             )
         }
     }
@@ -71,7 +81,7 @@ fun Mapping() {
                     AirAction.entries.forEach { a ->
                         TextButton(
                             onClick = {
-                                prefs.setAction(g, a)
+                                prefs.setAction(g, mode, a)
                                 picked = null
                                 if (prefs.enabled) AirService.reload(ctx)
                             },
@@ -79,7 +89,7 @@ fun Mapping() {
                         ) {
                             Text(
                                 a.title,
-                                color = if (a == prefs.actionFor(g)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                color = if (a == prefs.actionFor(g, mode)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.padding(vertical = 4.dp),
                             )
                         }
@@ -89,18 +99,5 @@ fun Mapping() {
             confirmButton = {},
             dismissButton = { TextButton(onClick = { picked = null }) { Text("بستن") } },
         )
-    }
-}
-
-@Composable
-private fun Row2(left: String, right: String, onClick: () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 9.dp),
-    ) {
-        Text(left, style = MaterialTheme.typography.bodyLarge)
-        Text(right, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
     }
 }

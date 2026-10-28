@@ -12,25 +12,9 @@ android {
         applicationId = "ir.airgesture"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
+        versionCode = 2
         // The build marker is printed on the diagnostics tab, so a report always says which build ran.
-        versionName = "1.0-" + (System.getenv("GITHUB_SHA")?.take(7) ?: "local")
-    }
-
-    // Two sensing back-ends over one injection path. "prox" needs no external model and builds
-    // anywhere; "hand" pulls MediaPipe from Google Maven.
-    flavorDimensions += "sense"
-    productFlavors {
-        create("hand") {
-            dimension = "sense"
-            applicationIdSuffix = ".hand"
-            versionNameSuffix = "-hand"
-        }
-        create("prox") {
-            dimension = "sense"
-            applicationIdSuffix = ".prox"
-            versionNameSuffix = "-prox"
-        }
+        versionName = "2.0-" + (System.getenv("GITHUB_SHA")?.take(7) ?: "ci")
     }
 
     signingConfigs {
@@ -66,6 +50,10 @@ android {
         abortOnError = false
         checkReleaseBuilds = false
     }
+    androidResources {
+        // Both .task models are already compressed zip archives; re-deflating them only slows the build.
+        noCompress += "task"
+    }
 }
 
 dependencies {
@@ -78,6 +66,5 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
-    // Flavor-specific: the proximity build must not need (or download) MediaPipe.
-    "handImplementation"("com.google.mediapipe:tasks-vision:0.10.29")
+    implementation("com.google.mediapipe:tasks-vision:0.10.29")
 }

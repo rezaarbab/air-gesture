@@ -19,11 +19,18 @@ object Air {
         val accReady: Boolean = false,
         val sourceUp: Boolean = false,
         val handVisible: Boolean = false,
+        val faceVisible: Boolean = false,
         val fps: Int = 0,
         val frames: Long = 0,
         val gestures: Long = 0,
         val lastGesture: String = "—",
         val lastAction: String = "—",
+        val faceMs: Float = 0f,
+        val handMs: Float = 0f,
+        val cursorX: Float = 0.5f,
+        val cursorY: Float = 0.5f,
+        val dwell: Float = 0f,
+        val target: String = "",
     )
 
     val state = MutableStateFlow(Snap())

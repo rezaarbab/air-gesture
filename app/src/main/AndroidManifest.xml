@@ -2,12 +2,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <uses-feature
+        android:name="android.hardware.camera.front"
+        android:required="false" />
     <uses-feature
         android:name="android.hardware.sensor.proximity"
         android:required="false" />
@@ -30,7 +35,8 @@
             </intent-filter>
         </activity>
 
-        <!-- Injects the recognised gesture into whatever app is on screen. -->
+        <!-- Injects the recognised gesture into whatever app is on screen, and reads the node
+             tree so the dwell ring can wrap the real control under the pointer. -->
         <service
             android:name=".inject.AirInputService"
             android:exported="false"
@@ -44,7 +50,10 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- Holds the sensors and the camera while air control is on. Declared per flavor:
-             the hand build needs foregroundServiceType=camera, the prox build does not. -->
+        <!-- Reads the camera and the proximity sensor while another app is on screen. -->
+        <service
+            android:name=".svc.AirService"
+            android:exported="false"
+            android:foregroundServiceType="camera" />
     </application>
 </manifest>

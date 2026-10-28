@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -29,15 +30,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import ir.airgesture.Air
 import ir.airgesture.Prefs
 import ir.airgesture.inject.AirInputService
-import ir.airgesture.model.Flavor
 import ir.airgesture.model.SenseMode
 import ir.airgesture.svc.AirService
-import androidx.compose.ui.platform.LocalContext
 
 @Composable
 fun Home() {
@@ -45,14 +45,19 @@ fun Home() {
     val prefs = remember { Prefs(ctx) }
     val snap by Air.state.collectAsState()
     var mode by remember { mutableStateOf(prefs.mode) }
-    var invert by remember { mutableStateOf(prefs.invert) }
-    var hud by remember { mutableStateOf(prefs.hud) }
+    var gain by remember { mutableStateOf(prefs.pointerGain) }
+    var smooth by remember { mutableStateOf(prefs.pointerSmooth) }
+    var dwell by remember { mutableStateOf(prefs.dwellMs) }
+    var dwellOn by remember { mutableStateOf(prefs.dwellEnabled) }
+    var needsTarget by remember { mutableStateOf(prefs.dwellNeedsTarget) }
+    var blink by remember { mutableStateOf(prefs.blinkEnabled) }
+    var stride by remember { mutableStateOf(prefs.handStride) }
     var speed by remember { mutableStateOf(prefs.swipeSpeed) }
+    var invert by remember { mutableStateOf(prefs.invert) }
+    var agility by remember { mutableStateOf(prefs.proxAgility) }
 
-    val camLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted ->
-        Air.note(if (granted) "perm: camera granted" else "perm: camera denied, hand mode cannot run")
+    val camLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        Air.note(if (granted) "perm: camera granted" else "perm: camera denied, pointer and hand modes cannot run")
         if (granted && snap.running) AirService.reload(ctx)
     }
 
@@ -60,74 +65,135 @@ fun Home() {
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(bottom = 20.dp),
+            .padding(bottom = 24.dp),
     ) {
         Panel("وضعیت") {
-            StatusRow("سرویس", snap.running, if (snap.running) "در حال خواندن حرکت" else "خاموش")
+            StatusRow("سرویس", snap.running, if (snap.running) mode.title else "خاموش")
             StatusRow(
                 "مجوز دسترسی (تزریق لمس)",
                 AirInputService.ready || accessibilityEnabled(ctx),
-                if (AirInputService.ready) "AirInputService به سیستم وصل است"
+                if (AirInputService.ready) "سرویس به سیستم وصل است"
                 else if (accessibilityEnabled(ctx)) "روشن است، هنوز وصل نشده"
                 else "در تنظیمات دسترسی «اشاره» را روشن کن",
             )
-            if (Flavor.hasHand) {
-                StatusRow(
-                    "دوربین جلو",
-                    granted(ctx, Manifest.permission.CAMERA),
-                    if (granted(ctx, Manifest.permission.CAMERA)) "دسترسی باز است" else "برای حالت دست لازم است",
-                )
-            }
-            StatusRow("پنجرهٔ شناور (HUD)", canOverlay(ctx), "نمایش آخرین اشاره روی صفحهٔ اپ دیگر")
-            StatusRow("استثنای باتری", ignoringBattery(ctx), "بعضی رام‌ها سرویس دوربین را می‌کشند")
+            StatusRow("دوربین جلو", granted(ctx, Manifest.permission.CAMERA), "برای نشانگر و حرکت دست لازم است")
+            StatusRow("پنجرهٔ شناور", canOverlay(ctx), "نشانگر، حلقهٔ آب و هایل‌بال")
+            StatusRow("استثنای باتری", ignoringBattery(ctx), "رام‌ها سرویس دارای دوربین را می‌بندند")
         }
 
-        Panel("منبع تشخیص") {
+        Panel("حالت کار") {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Choice("دوربین + دست", mode == SenseMode.HAND && Flavor.hasHand) {
-                    if (!Flavor.hasHand) {
-                        Air.note("mode: this APK has no hand tracker, pick proximity")
-                    } else {
-                        mode = SenseMode.HAND
-                        prefs.mode = mode
+                SenseMode.entries.forEach { m ->
+                    Choice(m.shortTitle(), mode == m && snap.running) {
+                        mode = m
+                        prefs.mode = m
                         apply(prefs, snap.running, ctx)
                     }
                 }
-                Choice("سنسور مجاورت", mode == SenseMode.PROX) {
-                    mode = SenseMode.PROX
-                    prefs.mode = mode
-                    apply(prefs, snap.running, ctx)
-                }
             }
             Hint(
-                if (mode == SenseMode.HAND) {
-                    "دوربین جلو دست را می‌بیند: بالا/پایین، پینچ، دو پینچ. دقیق‌تر، ولی باتری و چراغ دوربین."
-                } else {
-                    "سنسور مجاورت فقط «پوشاندن و برداشتن دست» را می‌فهمد: یک موج، دو موج، پوشاندن طولانی."
+                when (mode) {
+                    SenseMode.POINTER -> "سر نشانگر را می‌برد، پینچ کلیک است، نگه‌داشتن پینچ و حرکت = کشیدن، دو پینچ = تنظیم نقطهٔ مرجع."
+                    SenseMode.GESTURE -> "فقط دست: بالا/پایین، پینچ، دو پینچ، کف باز ثابت."
+                    SenseMode.PROX -> "فقط سنسور مجاورت: یک موج، دو موج، پوشاندن طولانی. بدون دوربین."
                 },
             )
         }
 
-        Panel("حساسیت") {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                SlowSpeeds.forEach { s ->
-                    Choice(label(s), speed == s) {
-                        speed = s
-                        prefs.swipeSpeed = s
+        if (mode == SenseMode.POINTER) {
+            Panel("نشانگر") {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    GainSpeeds.forEach { g ->
+                        Choice(pct(g), gain == g) {
+                            gain = g
+                            prefs.pointerGain = g
+                            apply(prefs, snap.running, ctx)
+                        }
+                    }
+                }
+                Hint("سرعت نشانگر نسبت به فاصلهٔ سر از نقطهٔ مرجع.")
+                Text("نرمی حرکت", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Smoothing.forEach { s ->
+                        Choice(s.second, smooth == s.first) {
+                            smooth = s.first
+                            prefs.pointerSmooth = s.first
+                            apply(prefs, snap.running, ctx)
+                        }
+                    }
+                }
+                Hint("نرمی بیشتر لرزش را می‌گیرد و کمی تاخیر اضافه می‌کند.")
+                ToggleRow("کلیک با توقف روی چیزها (dwell)", dwellOn) {
+                    dwellOn = it
+                    prefs.dwellEnabled = it
+                    apply(prefs, snap.running, ctx)
+                }
+                if (dwellOn) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        DwellTimes.forEach { d ->
+                            Choice("${d}ms", dwell == d) {
+                                dwell = d
+                                prefs.dwellMs = d
+                                apply(prefs, snap.running, ctx)
+                            }
+                        }
+                    }
+                    ToggleRow("فقط روی دکمه‌های واقعی توقف کن", needsTarget) {
+                        needsTarget = it
+                        prefs.dwellNeedsTarget = it
                         apply(prefs, snap.running, ctx)
                     }
                 }
+                ToggleRow("پلک هم کلیک باشد", blink) {
+                    blink = it
+                    prefs.blinkEnabled = it
+                    apply(prefs, snap.running, ctx)
+                }
+                Text("دقت مدل دست (فریم یکی در میون = روان‌تر)", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Strides.forEach { n ->
+                        Choice("هر $n", stride == n) {
+                            stride = n
+                            prefs.handStride = n
+                            apply(prefs, snap.running, ctx)
+                        }
+                    }
+                }
             }
-            Hint("سرعت لازم دست برای یک اشاره. «آرام‌تر» یعنی اشاره‌های آهسته هم شمرده می‌شوند ولی خطا هم بیشتر می‌شود.")
-            ToggleRow("عکسی کردن جهت عمودی", invert) {
-                invert = it
-                prefs.invert = it
-                apply(prefs, snap.running, ctx)
+        }
+
+        if (mode == SenseMode.GESTURE) {
+            Panel("حساسیت دست") {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    SlowSpeeds.forEach { s ->
+                        Choice(label(s), speed == s) {
+                            speed = s
+                            prefs.swipeSpeed = s
+                            apply(prefs, snap.running, ctx)
+                        }
+                    }
+                }
+                Hint("سرعت لازم دست برای یک اشاره؛ «آرام» اشاره‌های آهسته را هم می‌شمارد ولی خطا بیشتر می‌شود.")
+                ToggleRow("عکسی کردن جهت عمودی", invert) {
+                    invert = it
+                    prefs.invert = it
+                    apply(prefs, snap.running, ctx)
+                }
             }
-            ToggleRow("نمایش هایل‌بال روی صفحه", hud) {
-                hud = it
-                prefs.hud = it
-                apply(prefs, snap.running, ctx)
+        }
+
+        if (mode == SenseMode.PROX) {
+            Panel("حساسیت سنسور") {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Agility.forEach { a ->
+                        Choice(a.second, agility == a.first) {
+                            agility = a.first
+                            prefs.proxAgility = a.first
+                            apply(prefs, snap.running, ctx)
+                        }
+                    }
+                }
+                Hint("موج چقدر کوتاه باشد تا شمرده شود.")
             }
         }
 
@@ -140,14 +206,10 @@ fun Home() {
                     } else {
                         prefs.enabled = true
                         if (!accessibilityEnabled(ctx)) openAccessibility(ctx)
-                        if (mode == SenseMode.HAND && !granted(ctx, Manifest.permission.CAMERA)) {
-                            camLauncher.launch(Manifest.permission.CAMERA)
-                        }
+                        if (!granted(ctx, Manifest.permission.CAMERA)) camLauncher.launch(Manifest.permission.CAMERA)
                         AirService.start(ctx)
                     }
-                }) {
-                    Text(if (snap.running) "خاموش کردن" else "روشن کردن اشاره")
-                }
+                }) { Text(if (snap.running) "خاموش کردن" else "روشن کردن اشاره") }
                 OutlinedButton(onClick = { openAccessibility(ctx) }) { Text("تنظیمات دسترسی") }
             }
             Row(
@@ -155,25 +217,42 @@ fun Home() {
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 OutlinedButton(onClick = { if (!canOverlay(ctx)) openOverlay(ctx) }) { Text("مجوز پنجره") }
-                OutlinedButton(onClick = { if (Flavor.hasHand) camLauncher.launch(Manifest.permission.CAMERA) }) { Text("مجوز دوربین") }
+                OutlinedButton(onClick = { camLauncher.launch(Manifest.permission.CAMERA) }) { Text("مجوز دوربین") }
                 OutlinedButton(onClick = { openBattery(ctx) }) { Text("استثنای باتری") }
             }
             Text(
-                "آخرین: ${snap.lastGesture} → ${snap.lastAction}",
+                "نشانگر ${pct(snap.cursorX)} , ${pct(snap.cursorY)} · حلقه ${pct(snap.dwell)}",
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 12.dp),
+            )
+            Text(
+                "آخرین: ${snap.lastGesture} → ${snap.lastAction}",
+                style = MaterialTheme.typography.bodyMedium,
             )
         }
     }
 }
 
+private val GainSpeeds = listOf(1.6f, 2.4f, 3.4f, 4.6f)
+private val Smoothing = listOf(0.18f to "زیاد", 0.35f to "متوسط", 0.7f to "کم")
+private val DwellTimes = listOf(500L, 900L, 1400L, 2000L)
+private val Strides = listOf(1, 2, 3)
 private val SlowSpeeds = listOf(0.65f, 0.9f, 1.3f)
+private val Agility = listOf(0.7f to "تیز", 1.0f to "متوسط", 1.4f to "آرام")
+
+private fun SenseMode.shortTitle(): String = when (this) {
+    SenseMode.POINTER -> "نشانگر"
+    SenseMode.GESTURE -> "دست"
+    SenseMode.PROX -> "سنسور"
+}
 
 private fun label(s: Float) = when (s) {
     0.65f -> "آرام"
     0.9f -> "متوسط"
     else -> "تند"
 }
+
+private fun pct(v: Float): String = String.format(java.util.Locale.US, "%.2f", v)
 
 private fun apply(prefs: Prefs, running: Boolean, ctx: Context) {
     if (running) AirService.reload(ctx)

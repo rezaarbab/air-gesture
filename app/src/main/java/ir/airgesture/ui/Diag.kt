@@ -24,7 +24,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import ir.airgesture.Air
-import ir.airgesture.model.Flavor
+import ir.airgesture.Prefs
 
 /** What actually happened, in the order it happened. This is the screen a bug report needs. */
 @Composable
@@ -48,11 +48,17 @@ fun Diag() {
             .padding(bottom = 20.dp),
     ) {
         Panel("شمارش‌ها") {
-            Line("بیلد", "${Flavor.id} $version")
+            Line("بیلد", version)
+            Line("حالت", Prefs(ctx).mode.title)
             Line("سرویس", if (snap.running) "روشن" else "خاموش")
             Line("منبع بالا آمده", if (snap.sourceUp) "بله" else "نه")
-            Line("دست دیده می‌شود", if (snap.handVisible) "بله" else "نه")
+            Line("چهره", if (snap.faceVisible) "دیده می‌شود" else "نیست")
+            Line("دست", if (snap.handVisible) "دیده می‌شود" else "نیست")
             Line("فریم بر ثانیه", "${snap.fps}")
+            Line("زمان مدل چهره", "${ms(snap.faceMs)} ms")
+            Line("زمان مدل دست", "${ms(snap.handMs)} ms")
+            Line("نشانگر", "${num(snap.cursorX)} , ${num(snap.cursorY)}")
+            Line("حلقهٔ توقف", "${(snap.dwell * 100).toInt()}% روی «${snap.target}»")
             Line("فریم‌های خوانده‌شده", "${snap.frames}")
             Line("اشاره‌های ثبت‌شده", "${snap.gestures}")
             Line("آخرین اشاره", "${snap.lastGesture} → ${snap.lastAction}")
@@ -90,3 +96,7 @@ fun Diag() {
 private fun Line(k: String, v: String) {
     Text("$k: $v", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 2.dp))
 }
+
+private fun ms(v: Float): String = String.format(java.util.Locale.US, "%.1f", v)
+
+private fun num(v: Float): String = String.format(java.util.Locale.US, "%.2f", v)

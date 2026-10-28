@@ -1,6 +1,6 @@
 package ir.airgesture.decode
 
-/** Tunables. Everything is in frame units per second, so a 0.9 threshold means "nine tenths of the screen height in one second". */
+/** Tunables. Frame units are normalized 0..1; pointer output is screen fractions per second. */
 data class HandCfg(
     val minSpeed: Float = 0.9f,
     val minTravel: Float = 0.14f,
@@ -20,4 +20,36 @@ data class ProxCfg(
     val coverMs: Long = 900,
     val cooldownMs: Long = 300,
     val debounceMs: Long = 30,
+)
+
+/**
+ * Velocity control, not position control: the head offset from a stored neutral point becomes a
+ * cursor speed, so the pointer stops when the head returns to center. That is why a recenter
+ * gesture exists, and why this survives a slouching user better than mapping the nose to a pixel.
+ */
+data class PointerCfg(
+    val gainX: Float = 2.4f,
+    val gainY: Float = 2.4f,
+    val smooth: Float = 0.35f,
+    val deadzone: Float = 0.035f,
+    val clampSpeed: Float = 1.6f,
+    val invertY: Boolean = true,
+)
+
+data class BlinkCfg(
+    val close: Float = 0.55f,
+    val open: Float = 0.25f,
+    val minMs: Long = 60,
+    val maxMs: Long = 450,
+    val cooldownMs: Long = 700,
+)
+
+data class DwellCfg(
+    val enabled: Boolean = true,
+    val holdMs: Long = 900,
+    /** Cursor travel, in screen fractions, that counts as "moved away" and cancels the fill. */
+    val moveTolerance: Float = 0.02f,
+    val needsTarget: Boolean = false,
+    /** After a click the fill stays disarmed until the pointer actually moves. */
+    val rearmMs: Long = 220,
 )

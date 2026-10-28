@@ -28,15 +28,13 @@ jobs:
             -storepass air-tmp-2026 -keypass air-tmp-2026 \
             -dname "CN=Air, O=Air, C=IR"
 
-      - name: Build both flavors
-        run: gradle :app:assembleProxRelease :app:assembleHandRelease --no-daemon --stacktrace
+      - name: Prove the pure logic first
+        run: bash tools/run-tests.sh
+
+      - name: Build release APK
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
 
       - uses: actions/upload-artifact@v4
         with:
-          name: air-gesture-prox-apk
-          path: app/build/outputs/apk/prox/release/*.apk
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: air-gesture-hand-apk
-          path: app/build/outputs/apk/hand/release/*.apk
+          name: air-gesture-apk
+          path: app/build/outputs/apk/release/*.apk
